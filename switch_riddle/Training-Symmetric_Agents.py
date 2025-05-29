@@ -1,5 +1,5 @@
 import os
-#os.environ["JAX_PLATFORMS"] = "cpu"  # Forces JAX to run on CPU
+os.environ["JAX_PLATFORMS"] = "cpu"  # Forces JAX to run on CPU
 
 import jax #pip install jax
 print(f"JAX is using: {jax.devices()[0]}")
@@ -602,7 +602,7 @@ else:
     layout_name = layout_name
 
 current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-initial_dir = f'/data/samuel_lozano/hfsp_collective_learning/data_JaxMARL/Symmetric_Agents/{layout_name}/Checkpoints_{current_datetime}/'
+initial_dir = f'/data/samuel_lozano/hfsp_collective_learning/data_overcooked_original/Symmetric_Agents/{layout_name}/Checkpoints_{current_datetime}/'
 
 print(layout_name)
 print(current_datetime)

@@ -182,7 +182,7 @@ def example():
 
         # Perform the step transition.
         obs, state, reward, done, infos = env.step(key_step, state, actions)
-
+        print(infos)
         print("reward:", reward["agent_0"])
 
 
