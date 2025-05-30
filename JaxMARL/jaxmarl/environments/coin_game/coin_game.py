@@ -66,7 +66,7 @@ class CoinGame(MultiAgentEnv):
     ):
 
         super().__init__(num_agents=2)
-        self.agents = [str(i) for i in list(range(2))]
+        self.agents = [str(f'agent_{i}') for i in list(range(2))]
         self.payoff_matrix = payoff_matrix
 
         # helper functions
@@ -108,10 +108,10 @@ class CoinGame(MultiAgentEnv):
             ).at[idx].set(1)
             coop1 = state.coop1 + jnp.zeros_like(
                 state.counter, dtype=jnp.int16
-            ).at[idx].set(rr)
+            ).at[idx].set(rr.item())
             coop2 = state.coop2 + jnp.zeros_like(
                 state.counter, dtype=jnp.int16
-            ).at[idx].set(bb)
+            ).at[idx].set(bb.item())
             convention = jnp.stack([convention_1, convention_2]).reshape(2)
             return counter, coop1, coop2, convention
 
@@ -276,16 +276,16 @@ class CoinGame(MultiAgentEnv):
 
             next_red_coop = state.red_coop + jnp.zeros(
                 num_outer_steps, dtype=jnp.int8
-            ).at[state.outer_t].set(red_red_matches)
+            ).at[state.outer_t].set(red_red_matches.item())
             next_red_defect = state.red_defect + jnp.zeros(
                 num_outer_steps, dtype=jnp.int8
-            ).at[state.outer_t].set(red_blue_matches)
+            ).at[state.outer_t].set(red_blue_matches.item())
             next_blue_coop = state.blue_coop + jnp.zeros(
                 num_outer_steps, dtype=jnp.int8
-            ).at[state.outer_t].set(blue_blue_matches)
+            ).at[state.outer_t].set(blue_blue_matches.item())
             next_blue_defect = state.blue_defect + jnp.zeros(
                 num_outer_steps, dtype=jnp.int8
-            ).at[state.outer_t].set(blue_red_matches)
+            ).at[state.outer_t].set(blue_red_matches.item())
 
             next_state = EnvState(
                 red_pos=new_red_pos,

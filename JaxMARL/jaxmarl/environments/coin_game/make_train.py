@@ -6,32 +6,19 @@ import os
 import pickle
 import jaxmarl
 from jaxmarl import make
-from jaxmarl.environments.switch_riddle.actor_critic import ActorCritic
-
-
-def save_model(runner_state, save_dir, file):
-    # Asegura que el directorio de guardado exista
-    os.makedirs(save_dir, exist_ok=True)
-
-    # Construye la ruta completa al archivo
-    filename = os.path.join(save_dir, file)
-
-    # Extrae los train_states (asumiendo que runner_state[0] es un dict de train_states por agente)
-    train_states = runner_state[0]
-
-    # Extraer los parámetros de cada train_state y guardarlos en un diccionario
-    params_dict = {f'params_agent_{k}': ts.params for k, ts in train_states.items()}
-
-    # Guarda solo los parámetros en un archivo pickle
-    with open(filename, 'wb') as f:
-        pickle.dump(params_dict, f)
-
-    print(f"Model parameters saved to {filename}")
+from jaxmarl.environments.coin_game.actor_critic import ActorCritic
 
 def make_train(config):
     # Crear entornos
     keys = jax.random.split(jax.random.PRNGKey(0), config["NUM_ENVS"])
-    envs = [make("switch_riddle", num_agents=config["NUM_AGENTS"]) for _ in range(config["NUM_ENVS"])]
+    envs = [make("coin_game", 
+        num_inner_steps = config["NUM_INNER_STEPS"],
+        num_outer_steps = config["NUM_OUTER_STEPS"],
+        cnn = False,
+        egocentric = True,
+        shared_rewards = config["SHARED_REWARDS"],
+        payoff_matrix = config["PAYOFF_MATRIX"]
+        ) for _ in range(config["NUM_ENVS"])]
     states = [env.reset(k)[1] for env, k in zip(envs, keys)]
     obs = [env.reset(k)[0] for env, k in zip(envs, keys)]
 
@@ -47,7 +34,7 @@ def make_train(config):
     for i in range(config["NUM_AGENTS"]):
         agent = f"agent_{i}"
         model = ActorCritic(action_dim=action_dim)
-        dummy_obs = jnp.zeros(example_env.observation_space(agent).shape)[None, ...]
+        dummy_obs = jnp.zeros(example_env.observation_space().shape)[None, ...]
         rng = jax.random.PRNGKey(42 + i)
         variables = model.init(rng, dummy_obs)
         params[agent] = variables
@@ -75,49 +62,49 @@ def make_train(config):
     
     rewards = {}
 
+    # === TRAINING LOOP ===
     for epoch in range(config["NUM_EPOCHS"]):
         rewards[epoch] = {}
-        
+
         for env_idx, env in enumerate(envs):
             state = states[env_idx]
             obs_env = obs[env_idx]
             key = jax.random.PRNGKey(epoch * 100 + env_idx)
-    
+
             actions = {}
             values = {}
             log_probs = {}
-    
-            for i, agent in enumerate(env.agents):
+
+            for i in enumerate(env.agents):
+                agent = f"agent_{i[0]}"
                 obs_agent = jnp.array(obs_env[agent])[None, ...]
                 key, subkey = jax.random.split(key)
                 action, value, log_prob = select_action(models[agent], params[agent], obs_agent, subkey)
                 actions[agent] = action
                 values[agent] = value
                 log_probs[agent] = log_prob
-    
+
             obs_next, state_next, reward, done, info = env.step(key, state, actions)
-    
+
             # PPO Step (1-step advantage)
             for agent in env.agents:
                 obs_agent = jnp.array(obs_env[agent])[None, ...]
                 rew = reward[agent]
                 advantage = rew - values[agent]
                 returns = rew
-    
+
                 def grad_loss(p):
                     return loss_fn(p, models[agent], obs_agent, actions[agent], advantage, log_probs[agent], returns)
-    
+
                 grads = jax.grad(grad_loss)(params[agent])
                 updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
                 params[agent] = optax.apply_updates(params[agent], updates)
-                rewards[epoch][agent] = rew
+                rewards[epoch][agent] = rew.item()
 
             states[env_idx] = state_next
             obs[env_idx] = obs_next
-    
+
         if epoch % config["SHOW_EVERY_N_EPOCHS"] == 0:
             print(f"\nEpoch {epoch}:")
             for agent in reward:
                 print(f"  Reward of {agent} = {rewards[epoch][agent]:.2f}")
-
-    return params, rewards
