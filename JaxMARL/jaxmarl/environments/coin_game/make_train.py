@@ -5,29 +5,37 @@ import csv
 import os
 import pickle
 import jaxmarl
+from datetime import datetime
 from jaxmarl import make
 from jaxmarl.environments.coin_game.actor_critic import ActorCritic
 
 def make_train(config):
+    current_date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    path = os.path.join(config["SAVE_DIR"], f"Training_{current_date}")
+    os.makedirs(path, exist_ok=True)
+    config["PATH"] = path
+
+    # Save config to file
+    with open(os.path.join(path, "config.txt"), "w") as f:
+        for key, val in config.items():
+            f.write(f"{key}: {val}\n")
+
     # Crear entornos
     keys = jax.random.split(jax.random.PRNGKey(0), config["NUM_ENVS"])
     envs = [make("coin_game", 
         num_inner_steps = config["NUM_INNER_STEPS"],
-        num_outer_steps = config["NUM_OUTER_STEPS"],
+        num_outer_steps = config["NUM_EPOCHS"],
         cnn = False,
-        egocentric = True,
-        shared_rewards = config["SHARED_REWARDS"],
-        payoff_matrix = config["PAYOFF_MATRIX"]
+        egocentric = False,
+        payoff_matrix = config["PAYOFF_MATRIX"],
+        grid_size = config["GRID_SIZE"],
+        reward_coef = config["REWARD_COEF"]
         ) for _ in range(config["NUM_ENVS"])]
     states = [env.reset(k)[1] for env, k in zip(envs, keys)]
     obs = [env.reset(k)[0] for env, k in zip(envs, keys)]
 
     # === INIT NETWORKS, OPTIMIZERS ===
-    params = {}
-    opt_state = {}
-    models = {}
-    optimizers = {}
-
+    params, opt_state, models, optimizers = {}, {}, {}, {}
     example_env = envs[0]
     action_dim = example_env.action_space("agent_0").n
 
@@ -60,51 +68,159 @@ def make_train(config):
         loss = actor_loss + 0.5 * critic_loss
         return loss.mean()
     
-    rewards = {}
+    # === LOGGING INIT ===
+    rewards, pure_rewards, action_stats_total = {}, {}, {}
+    csv_path = os.path.join(path, "training_stats.csv")
+    write_header = not os.path.exists(csv_path)
 
     # === TRAINING LOOP ===
     for epoch in range(config["NUM_EPOCHS"]):
-        rewards[epoch] = {}
+        rewards[epoch], pure_rewards[epoch], action_stats_total[epoch] = {}, {}, {}
 
         for env_idx, env in enumerate(envs):
             state = states[env_idx]
             obs_env = obs[env_idx]
             key = jax.random.PRNGKey(epoch * 100 + env_idx)
 
-            actions = {}
-            values = {}
-            log_probs = {}
 
-            for i in enumerate(env.agents):
-                agent = f"agent_{i[0]}"
-                obs_agent = jnp.array(obs_env[agent])[None, ...]
-                key, subkey = jax.random.split(key)
-                action, value, log_prob = select_action(models[agent], params[agent], obs_agent, subkey)
-                actions[agent] = action
-                values[agent] = value
-                log_probs[agent] = log_prob
+            if config["TRAINING_TYPE"] == 'AC Step':
 
-            obs_next, state_next, reward, done, info = env.step(key, state, actions)
+                actions, values, log_probs = {}, {}, {}
 
-            # PPO Step (1-step advantage)
-            for agent in env.agents:
-                obs_agent = jnp.array(obs_env[agent])[None, ...]
-                rew = reward[agent]
-                advantage = rew - values[agent]
-                returns = rew
+                for i in enumerate(env.agents):
+                    agent = f"agent_{i[0]}"
+                    obs_agent = jnp.array(obs_env[agent])[None, ...]
+                    key, subkey = jax.random.split(key)
+                    action, value, log_prob = select_action(models[agent], params[agent], obs_agent, subkey)
+                    actions[agent] = action
+                    values[agent] = value
+                    log_probs[agent] = log_prob
 
-                def grad_loss(p):
-                    return loss_fn(p, models[agent], obs_agent, actions[agent], advantage, log_probs[agent], returns)
+                obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
 
-                grads = jax.grad(grad_loss)(params[agent])
-                updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
-                params[agent] = optax.apply_updates(params[agent], updates)
-                rewards[epoch][agent] = rew.item()
+                # PPO Step (1-step advantage)
+                for agent in env.agents:
+                    obs_agent = jnp.array(obs_env[agent])[None, ...]
+                    rew = reward[agent]
+                    advantage = rew - values[agent]
+                    returns = rew
 
-            states[env_idx] = state_next
-            obs[env_idx] = obs_next
+                    def grad_loss(p):
+                        return loss_fn(p, models[agent], obs_agent, actions[agent], advantage, log_probs[agent], returns)
+
+                    grads = jax.grad(grad_loss)(params[agent])
+                    updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
+                    params[agent] = optax.apply_updates(params[agent], updates)
+                    rewards[epoch][agent] = infos[agent]["cumulated_modified_reward"].item()
+                    pure_rewards[epoch][agent] = infos[agent]["cumulated_pure_reward"].item()
+                    action_stats_total[epoch][agent] = infos[agent]["cumulated_action_stats"]
+
+                states[env_idx] = state_next
+                obs[env_idx] = obs_next
+
+            elif config["TRAINING_TYPE"] == 'AC Epoch':
+                done = False
+                trajectory = {
+                    agent: {
+                        "obs": [],
+                        "actions": [],
+                        "log_probs": [],
+                        "rewards": [],
+                        "values": [],
+                    }
+                    for agent in env.agents
+                }
+
+                while not done:
+                    actions, values, log_probs = {}, {}, {}
+
+                    for i in enumerate(env.agents):
+                        agent = f"agent_{i[0]}"
+                        obs_agent = jnp.array(obs_env[agent])[None, ...]
+                        key, subkey = jax.random.split(key)
+                        action, value, log_prob = select_action(models[agent], params[agent], obs_agent, subkey)
+                        actions[agent] = action
+                        values[agent] = value
+                        log_probs[agent] = log_prob
+
+                        trajectory[agent]["obs"].append(obs_agent)
+                        trajectory[agent]["actions"].append(action)
+                        trajectory[agent]["log_probs"].append(log_prob)
+                        trajectory[agent]["values"].append(value)
+
+                    obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
+
+                    for agent in env.agents:
+                        trajectory[agent]["rewards"].append(reward[agent])
+
+                    done = dones["__all__"]
+                    state = state_next
+                    obs_env = obs_next
+
+                # PPO update per agent after full episode
+                for agent in env.agents:
+                    obs_batch = jnp.concatenate(trajectory[agent]["obs"], axis=0)
+                    action_batch = jnp.stack(trajectory[agent]["actions"])
+                    log_prob_batch = jnp.stack(trajectory[agent]["log_probs"])
+                    value_batch = jnp.stack(trajectory[agent]["values"]).squeeze()
+                    reward_batch = jnp.array(trajectory[agent]["rewards"])
+
+                    # Simple return and advantage (no bootstrapping)
+                    returns = reward_batch.sum()
+                    advantage = returns - value_batch.sum()
+
+                    def grad_loss(p):
+                        return loss_fn(p, models[agent], obs_batch, action_batch, advantage, log_prob_batch, returns)
+
+                    grads = jax.grad(grad_loss)(params[agent])
+                    updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
+                    params[agent] = optax.apply_updates(params[agent], updates)
+
+                    rewards[epoch][agent] = infos[agent]["cumulated_modified_reward"].item()
+                    pure_rewards[epoch][agent] = infos[agent]["cumulated_pure_reward"].item()
+                    action_stats_total[epoch][agent] = infos[agent]["cumulated_action_stats"]
+
+                states[env_idx] = state
+                obs[env_idx] = obs_env
+            
+            else:
+                print('ERROR EN EL TRAINING_TYPE')
+                break
+
+        row = {
+            "epoch": epoch,
+            "reward_agent_0": rewards[epoch]["agent_0"],
+            "reward_agent_1": rewards[epoch]["agent_1"],
+            "pure_reward_agent_0": float(pure_rewards[epoch]["agent_0"]),
+            "pure_reward_agent_1": float(pure_rewards[epoch]["agent_1"]),
+            "pure_reward_total": float(pure_rewards[epoch]["agent_0"]) + float(pure_rewards[epoch]["agent_1"]),
+        }
+
+        for agent in ["agent_0", "agent_1"]:
+            stats = action_stats_total[epoch][agent]
+            suffix = f"_{agent}"
+            row.update({
+                "own_coin_collected" + suffix: int(stats[0]),
+                "other_coin_collected" + suffix: int(stats[1]),
+                "rejected_own" + suffix: int(stats[2]),
+                "rejected_other" + suffix: int(stats[3]),
+                "no_coin_visible" + suffix: int(stats[4]),
+            })
+
+        with open(csv_path, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=row.keys())
+            if write_header:
+                writer.writeheader()
+                write_header = False
+            writer.writerow(row)
 
         if epoch % config["SHOW_EVERY_N_EPOCHS"] == 0:
             print(f"\nEpoch {epoch}:")
             for agent in reward:
-                print(f"  Reward of {agent} = {rewards[epoch][agent]:.2f}")
+                print(f"  Pure reward of {agent} = {pure_rewards[epoch][agent]:.2f}")
+
+        if epoch % config["SAVE_EVERY_N_EPOCHS"] == 0:
+            with open(os.path.join(path, f"params_epoch_{epoch}.pkl"), "wb") as f:
+                pickle.dump(params, f)
+
+    return params

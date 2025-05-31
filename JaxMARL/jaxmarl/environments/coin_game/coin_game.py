@@ -24,8 +24,10 @@ class EnvState:
     coop1: jnp.ndarray  # 9
     coop2: jnp.ndarray  # 9
     last_state: jnp.ndarray  # 2
+    action_stats: jnp.ndarray
 
 
+# Interacciones entre agentes (S -> no coger moneda, C -> coger moneda propia, D -> coger moneda ajena)
 STATES = jnp.array(
     [
         [0],  # SS
@@ -39,6 +41,7 @@ STATES = jnp.array(
         [8],  # DS
     ]
 )
+
 MOVES = jnp.array(
     [
         [0, 1],  # right
@@ -61,13 +64,18 @@ class CoinGame(MultiAgentEnv):
         num_outer_steps: int = 10,
         cnn: bool = False,
         egocentric: bool = False,
-        shared_rewards: bool = False,
         payoff_matrix=[[1, 1, -2], [1, 1, -2]],
+        grid_size: int = 3,
+        reward_coef=[[1,0],[1,0]]
     ):
 
         super().__init__(num_agents=2)
         self.agents = [str(f'agent_{i}') for i in list(range(2))]
         self.payoff_matrix = payoff_matrix
+        self.grid_size = grid_size
+        self.reward_coef = reward_coef
+        self.cumulated_pure_rewards = {agent: 0.0 for agent in self.agents}
+        self.cumulated_modified_rewards = {agent: 0.0 for agent in self.agents}
 
         # helper functions
         def _update_stats(
@@ -89,7 +97,7 @@ class CoinGame(MultiAgentEnv):
                 idx = jnp.where((s == jnp.array([1, 0])).all(), 8, idx)
                 return idx
 
-            # actions are X, C, D
+            # actions are S, C, D
             a1 = 0
             a1 = jnp.where(rr, 1, a1)
             a1 = jnp.where(rb, 2, a1)
@@ -116,8 +124,8 @@ class CoinGame(MultiAgentEnv):
             return counter, coop1, coop2, convention
 
         def _abs_position(state: EnvState) -> jnp.ndarray:
-            obs1 = jnp.zeros((3, 3, 4), dtype=jnp.int8)
-            obs2 = jnp.zeros((3, 3, 4), dtype=jnp.int8)
+            obs1 = jnp.zeros((self.grid_size, self.grid_size, 4), dtype=jnp.int8)
+            obs2 = jnp.zeros((self.grid_size, self.grid_size, 4), dtype=jnp.int8)
 
             # obs channels are [red_player, blue_player, red_coin, blue_coin]
             obs1 = obs1.at[state.red_pos[0], state.red_pos[1], 0].set(1)
@@ -155,12 +163,12 @@ class CoinGame(MultiAgentEnv):
             agent_loc = jnp.array([state.red_pos[0], state.red_pos[1]])
             ego_offset = jnp.ones(2, dtype=jnp.int8) - agent_loc
 
-            rel_other_player = (state.blue_pos + ego_offset) % 3
-            rel_red_coin = (state.red_coin_pos + ego_offset) % 3
-            rel_blue_coin = (state.blue_coin_pos + ego_offset) % 3
+            rel_other_player = (state.blue_pos + ego_offset) % self.grid_size
+            rel_red_coin = (state.red_coin_pos + ego_offset) % self.grid_size
+            rel_blue_coin = (state.blue_coin_pos + ego_offset) % self.grid_size
 
             # create observation
-            obs = jnp.zeros((3, 3, 4), dtype=jnp.int8)
+            obs = jnp.zeros((self.grid_size, self.grid_size, 4), dtype=jnp.int8)
             obs = obs.at[1, 1, 0].set(1)
             obs = obs.at[rel_other_player[0], rel_other_player[1], 1].set(1)
             obs = obs.at[rel_red_coin[0], rel_red_coin[1], 2].set(1)
@@ -198,15 +206,34 @@ class CoinGame(MultiAgentEnv):
             if not cnn:
                 return {agent: obs[agent].flatten() for agent in obs}
             return obs
+        
+        def _is_adjacent(pos1, pos2):
+            return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1]) == 1
 
+        def _classify_action(pos, coin_pos, got_coin):
+            """Devuelve un vector one-hot de 5 elementos para la acción realizada"""
+            own_adjacent = _is_adjacent(pos[0], coin_pos[0])
+            other_adjacent = _is_adjacent(pos[0], coin_pos[1])
+
+            if got_coin == 0:  # own
+                return jnp.array([1, 0, 0, 0, 0])
+            elif got_coin == 1:  # other
+                return jnp.array([0, 1, 0, 0, 0])
+            elif own_adjacent:
+                return jnp.array([0, 0, 1, 0, 0])
+            elif other_adjacent:
+                return jnp.array([0, 0, 0, 1, 0])
+            else:
+                return jnp.array([0, 0, 0, 0, 1])
+            
         def _step(
             key: chex.PRNGKey,
             state: EnvState,
             actions: Tuple[int, int],
         ):
             action_0, action_1 = list(actions.values())
-            new_red_pos = (state.red_pos + MOVES[action_0]) % 3
-            new_blue_pos = (state.blue_pos + MOVES[action_1]) % 3
+            new_red_pos = (state.red_pos + MOVES[action_0]) % self.grid_size
+            new_blue_pos = (state.blue_pos + MOVES[action_1]) % self.grid_size
             red_reward, blue_reward = 0, 0
 
             red_red_matches = jnp.all(
@@ -261,7 +288,7 @@ class CoinGame(MultiAgentEnv):
 
             key, subkey = jax.random.split(key)
             new_random_coin_poses = jax.random.randint(
-                subkey, shape=(2, 2), minval=0, maxval=3
+                subkey, shape=(2, 2), minval=0, maxval=self.grid_size
             )
             new_red_coin_pos = jnp.where(
                 jnp.logical_or(red_red_matches, blue_red_matches),
@@ -287,6 +314,20 @@ class CoinGame(MultiAgentEnv):
                 num_outer_steps, dtype=jnp.int8
             ).at[state.outer_t].set(blue_red_matches.item())
 
+            red_stats = _classify_action(
+                new_red_pos,
+                (state.red_coin_pos, state.blue_coin_pos),
+                jnp.where(red_red_matches, 0, jnp.where(red_blue_matches, 1, -1))
+            )
+
+            blue_stats = _classify_action(
+                new_blue_pos,
+                (state.blue_coin_pos, state.red_coin_pos),
+                jnp.where(blue_blue_matches, 0, jnp.where(blue_red_matches, 1, -1))
+            )
+
+            new_action_stats = state.action_stats + jnp.stack([red_stats, blue_stats])
+
             next_state = EnvState(
                 red_pos=new_red_pos,
                 blue_pos=new_blue_pos,
@@ -302,6 +343,7 @@ class CoinGame(MultiAgentEnv):
                 coop1=coop1,
                 coop2=coop2,
                 last_state=last_state,
+                action_stats=new_action_stats,
             )
 
             obs = _state_to_obs(next_state)
@@ -342,24 +384,43 @@ class CoinGame(MultiAgentEnv):
                 coop1=coop1,
                 coop2=coop2,
                 last_state=jnp.where(reset_inner, jnp.zeros(2), last_state),
+                action_stats = jnp.where(reset_inner, jnp.zeros((2, 5), dtype=jnp.int32), new_action_stats)
             )
 
             obs = {agent: obs for agent, obs in zip(self.agents, [jnp.where(reset_inner, reset_obs[i], obs[i]) for i in obs])}
 
-            blue_reward = jnp.where(reset_inner, 0.0, blue_reward)
             red_reward = jnp.where(reset_inner, 0.0, red_reward)
+            blue_reward = jnp.where(reset_inner, 0.0, blue_reward)
 
-            if shared_rewards:
-                # shared reward (social welfare\sum of agents individual rewards)
-                rewards = {agent: reward for agent, reward in zip(self.agents, (sum((red_reward, blue_reward)),  sum((red_reward, blue_reward))))}
-            else:
-                # individual reward
-                rewards = {agent: reward for agent, reward in zip(self.agents, (red_reward, blue_reward))}
+            # customized rewards
+            rewards = {agent: reward for agent, reward in 
+                           zip(self.agents, (self.reward_coef[0][0] * red_reward + self.reward_coef[0][1] * blue_reward, 
+                                             self.reward_coef[1][0] * blue_reward + self.reward_coef[1][1] * red_reward))}
+
+            pure_rewards = {"agent_0": red_reward, "agent_1": blue_reward}
+
+            # update cumulated rewards
+            for agent in self.agents:
+                self.cumulated_pure_rewards[agent] = self.cumulated_pure_rewards[agent] + pure_rewards[agent]
+                self.cumulated_modified_rewards[agent] = self.cumulated_modified_rewards[agent] + rewards[agent]
+
+            cumulated_action_stats = {
+                agent: new_action_stats[i]
+                for i, agent in enumerate(self.agents)
+            }
 
             dones = {agent: reset_inner for agent in self.agents}
             dones['__all__'] = reset_inner
             
-            infos = {}
+            infos = {
+                agent: {
+                    "cumulated_pure_reward": self.cumulated_pure_rewards[agent],
+                    "cumulated_modified_reward": self.cumulated_modified_rewards[agent],
+                    "cumulated_action_stats": cumulated_action_stats[agent]
+                }
+                for agent in self.agents
+            }
+
             return (
                 obs,
                 next_state,
@@ -373,11 +434,11 @@ class CoinGame(MultiAgentEnv):
         ) -> Tuple[jnp.ndarray, EnvState]:
             key, subkey = jax.random.split(key)
             all_pos = jax.random.randint(
-                subkey, shape=(4, 2), minval=0, maxval=3
+                subkey, shape=(4, 2), minval=0, maxval=self.grid_size
             )
 
             empty_stats = jnp.zeros((num_outer_steps), dtype=jnp.int8)
-            state_stats = jnp.zeros(9)
+            state_stats = jnp.zeros(self.grid_size * self.grid_size)
 
             state = EnvState(
                 red_pos=all_pos[0, :],
@@ -394,6 +455,7 @@ class CoinGame(MultiAgentEnv):
                 coop1=state_stats,
                 coop2=state_stats,
                 last_state=jnp.zeros(2),
+                action_stats = jnp.zeros((2, 5), dtype=jnp.int32)
             )
             obs = _state_to_obs(state)
             return obs, state
@@ -422,12 +484,12 @@ class CoinGame(MultiAgentEnv):
 
     def observation_space(self) -> spaces.Box:
         """Observation space of the environment."""
-        _shape = (3, 3, 4) if self.cnn else (36,)
+        _shape = (self.grid_size, self.grid_size, 4) if self.cnn else (self.grid_size * self.grid_size * 4,)
         return spaces.Box(low=0, high=1, shape=_shape, dtype=jnp.uint8)
 
     def state_space(self) -> spaces.Dict:
         """State space of the environment."""
-        _shape = (3, 3, 4) if self.cnn else (36,)
+        _shape = (self.grid_size, self.grid_size, 4) if self.cnn else (self.grid_size * self.grid_size * 4,)
         return spaces.Box(low=0, high=1, shape=_shape, dtype=jnp.uint8)
 
     def render(self, state: EnvState):
@@ -443,7 +505,7 @@ class CoinGame(MultiAgentEnv):
         canvas = FigureCanvas(fig)
         ax = fig.add_subplot(121)
         ax.imshow(
-            np.zeros((3, 3)),
+            np.zeros((self.grid_size, self.grid_size)),
             cmap="Greys",
             vmin=0,
             vmax=1,
@@ -455,8 +517,8 @@ class CoinGame(MultiAgentEnv):
         ax.set_aspect("equal")
 
         # ax.margins(0)
-        ax.set_xticks(jnp.arange(1, 4))
-        ax.set_yticks(jnp.arange(1, 4))
+        ax.set_xticks(jnp.arange(1, self.grid_size + 1))
+        ax.set_yticks(jnp.arange(1, self.grid_size + 1))
         ax.grid()
         red_pos = jnp.squeeze(state.red_pos)
         blue_pos = jnp.squeeze(state.blue_pos)
