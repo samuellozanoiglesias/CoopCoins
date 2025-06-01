@@ -78,6 +78,7 @@ def make_train(config):
         rewards[epoch], pure_rewards[epoch], action_stats_total[epoch] = {}, {}, {}
 
         for env_idx, env in enumerate(envs):
+            rewards[epoch][env_idx], pure_rewards[epoch][env_idx], action_stats_total[epoch][env_idx] = {}, {}, {}
             state = states[env_idx]
             obs_env = obs[env_idx]
             key = jax.random.PRNGKey(epoch * 100 + env_idx)
@@ -111,9 +112,9 @@ def make_train(config):
                     grads = jax.grad(grad_loss)(params[agent])
                     updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
                     params[agent] = optax.apply_updates(params[agent], updates)
-                    rewards[epoch][agent] = infos[agent]["cumulated_modified_reward"].item()
-                    pure_rewards[epoch][agent] = infos[agent]["cumulated_pure_reward"].item()
-                    action_stats_total[epoch][agent] = infos[agent]["cumulated_action_stats"]
+                    rewards[epoch][env_idx][agent] = infos[agent]["cumulated_modified_reward"].item()
+                    pure_rewards[epoch][env_idx][agent] = infos[agent]["cumulated_pure_reward"].item()
+                    action_stats_total[epoch][env_idx][agent] = infos[agent]["cumulated_action_stats"]
 
                 states[env_idx] = state_next
                 obs[env_idx] = obs_next
@@ -157,6 +158,7 @@ def make_train(config):
                     state = state_next
                     obs_env = obs_next
 
+
                 # PPO update per agent after full episode
                 for agent in env.agents:
                     obs_batch = jnp.concatenate(trajectory[agent]["obs"], axis=0)
@@ -176,9 +178,9 @@ def make_train(config):
                     updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
                     params[agent] = optax.apply_updates(params[agent], updates)
 
-                    rewards[epoch][agent] = infos[agent]["cumulated_modified_reward"].item()
-                    pure_rewards[epoch][agent] = infos[agent]["cumulated_pure_reward"].item()
-                    action_stats_total[epoch][agent] = infos[agent]["cumulated_action_stats"]
+                    rewards[epoch][env_idx][agent] = infos[agent]["cumulated_modified_reward"].item()
+                    pure_rewards[epoch][env_idx][agent] = infos[agent]["cumulated_pure_reward"].item()
+                    action_stats_total[epoch][env_idx][agent] = infos[agent]["cumulated_action_stats"]
 
                 states[env_idx] = state
                 obs[env_idx] = obs_env
@@ -186,38 +188,39 @@ def make_train(config):
             else:
                 print('ERROR EN EL TRAINING_TYPE')
                 break
+        
+            row = {
+                "epoch": epoch,
+                "env": env_idx,
+                "reward_agent_0": rewards[epoch][env_idx]["agent_0"],
+                "reward_agent_1": rewards[epoch][env_idx]["agent_1"],
+                "pure_reward_agent_0": float(pure_rewards[epoch][env_idx]["agent_0"]),
+                "pure_reward_agent_1": float(pure_rewards[epoch][env_idx]["agent_1"]),
+                "pure_reward_total": float(pure_rewards[epoch][env_idx]["agent_0"]) + float(pure_rewards[epoch][env_idx]["agent_1"]),
+            }
 
-        row = {
-            "epoch": epoch,
-            "reward_agent_0": rewards[epoch]["agent_0"],
-            "reward_agent_1": rewards[epoch]["agent_1"],
-            "pure_reward_agent_0": float(pure_rewards[epoch]["agent_0"]),
-            "pure_reward_agent_1": float(pure_rewards[epoch]["agent_1"]),
-            "pure_reward_total": float(pure_rewards[epoch]["agent_0"]) + float(pure_rewards[epoch]["agent_1"]),
-        }
+            for agent in ["agent_0", "agent_1"]:
+                stats = action_stats_total[epoch][env_idx][agent]
+                suffix = f"_{agent}"
+                row.update({
+                    "own_coin_collected" + suffix: int(stats[0]),
+                    "other_coin_collected" + suffix: int(stats[1]),
+                    "rejected_own" + suffix: int(stats[2]),
+                    "rejected_other" + suffix: int(stats[3]),
+                    "no_coin_visible" + suffix: int(stats[4]),
+                })
 
-        for agent in ["agent_0", "agent_1"]:
-            stats = action_stats_total[epoch][agent]
-            suffix = f"_{agent}"
-            row.update({
-                "own_coin_collected" + suffix: int(stats[0]),
-                "other_coin_collected" + suffix: int(stats[1]),
-                "rejected_own" + suffix: int(stats[2]),
-                "rejected_other" + suffix: int(stats[3]),
-                "no_coin_visible" + suffix: int(stats[4]),
-            })
+            with open(csv_path, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=row.keys())
+                if write_header:
+                    writer.writeheader()
+                    write_header = False
+                writer.writerow(row)
 
-        with open(csv_path, "a", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=row.keys())
-            if write_header:
-                writer.writeheader()
-                write_header = False
-            writer.writerow(row)
-
-        if epoch % config["SHOW_EVERY_N_EPOCHS"] == 0:
-            print(f"\nEpoch {epoch}:")
-            for agent in reward:
-                print(f"  Pure reward of {agent} = {pure_rewards[epoch][agent]:.2f}")
+            if epoch % config["SHOW_EVERY_N_EPOCHS"] == 0:
+                print(f"\nEpoch {epoch}:")
+                for agent in reward:
+                    print(f"  Pure reward of {agent} in env {env_idx} = {pure_rewards[epoch][env_idx][agent]:.2f}")
 
         if epoch % config["SAVE_EVERY_N_EPOCHS"] == 0:
             with open(os.path.join(path, f"params_epoch_{epoch}.pkl"), "wb") as f:

@@ -389,9 +389,6 @@ class CoinGame(MultiAgentEnv):
 
             obs = {agent: obs for agent, obs in zip(self.agents, [jnp.where(reset_inner, reset_obs[i], obs[i]) for i in obs])}
 
-            red_reward = jnp.where(reset_inner, 0.0, red_reward)
-            blue_reward = jnp.where(reset_inner, 0.0, blue_reward)
-
             # customized rewards
             rewards = {agent: reward for agent, reward in 
                            zip(self.agents, (self.reward_coef[0][0] * red_reward + self.reward_coef[0][1] * blue_reward, 
@@ -401,8 +398,16 @@ class CoinGame(MultiAgentEnv):
 
             # update cumulated rewards
             for agent in self.agents:
-                self.cumulated_pure_rewards[agent] = self.cumulated_pure_rewards[agent] + pure_rewards[agent]
-                self.cumulated_modified_rewards[agent] = self.cumulated_modified_rewards[agent] + rewards[agent]
+                self.cumulated_pure_rewards[agent] += pure_rewards[agent]
+                self.cumulated_modified_rewards[agent] += rewards[agent]
+
+            # Copy data before resetting
+            cumulated_pure_rewards = {k: v.copy() for k, v in self.cumulated_pure_rewards.items()}
+            cumulated_modified_rewards = {k: v.copy() for k, v in self.cumulated_modified_rewards.items()}
+
+            for agent in self.agents:
+                self.cumulated_pure_rewards[agent] = jnp.where(reset_inner, 0.0, self.cumulated_pure_rewards[agent])
+                self.cumulated_modified_rewards[agent] = jnp.where(reset_inner, 0.0, self.cumulated_modified_rewards[agent])
 
             cumulated_action_stats = {
                 agent: new_action_stats[i]
@@ -414,8 +419,8 @@ class CoinGame(MultiAgentEnv):
             
             infos = {
                 agent: {
-                    "cumulated_pure_reward": self.cumulated_pure_rewards[agent],
-                    "cumulated_modified_reward": self.cumulated_modified_rewards[agent],
+                    "cumulated_pure_reward": cumulated_pure_rewards[agent],
+                    "cumulated_modified_reward": cumulated_modified_rewards[agent],
                     "cumulated_action_stats": cumulated_action_stats[agent]
                 }
                 for agent in self.agents
