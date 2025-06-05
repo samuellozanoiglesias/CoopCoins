@@ -172,3 +172,4 @@ cython_debug/
 
 coin_game/inputs*
 coin_game/logs*
+coin_game/brigit*
