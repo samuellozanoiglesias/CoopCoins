@@ -1,10 +1,9 @@
-from typing import Sequence, NamedTuple, Any
-
 import numpy as np
 import jax.numpy as jnp
 from flax import linen as nn
 from flax.linen.initializers import constant, orthogonal
 import distrax 
+from typing import NamedTuple
 
 # === NETWORK DEFINITION ===
 class ActorCritic(nn.Module):
@@ -31,3 +30,12 @@ class ActorCritic(nn.Module):
         value = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(c)
 
         return pi, jnp.squeeze(value, axis=-1)
+    
+class Transition(NamedTuple):
+    done: jnp.ndarray
+    action: jnp.ndarray
+    value: jnp.ndarray
+    reward: jnp.ndarray
+    log_prob: jnp.ndarray
+    obs: jnp.ndarray
+    info: jnp.ndarray

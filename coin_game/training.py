@@ -4,7 +4,7 @@ import pickle
 import sys
 import jax.numpy as jnp
 import numpy as np
-from jaxmarl.environments.coin_game.make_train import make_train
+from jaxmarl.environments.coin_game.make_train_2 import make_train
 
 # Leer archivo de entrada
 input_path = sys.argv[1]
@@ -46,11 +46,15 @@ config = {
     "SHOW_EVERY_N_EPOCHS": SHOW_EVERY_N_EPOCHS,
     "SAVE_EVERY_N_EPOCHS": SAVE_EVERY_N_EPOCHS,
     "LR": LR,
+    "MAX_GRAD_NORM": 0.5,
     "PAYOFF_MATRIX": PAYOFF_MATRIX,
     "GRID_SIZE": GRID_SIZE,
     "REWARD_COEF": REWARD_COEF,
     "SAVE_DIR": save_dir,
     "TRAINING_TYPE": training_type,
+    "MINIBATCH_SIZE": 32,
+    "MINIBATCH_EPOCHS": 4,
+    "CLIP_EPSILON": 0.2,
     "DEVICE": jax.devices()
 }
 

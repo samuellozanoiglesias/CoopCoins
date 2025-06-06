@@ -40,6 +40,7 @@ def make_train(config):
     action_dim = example_env.action_space("agent_0").n
     entropy_coef = config.get("ENTROPY_COEF", 0.01)
     gamma = config.get("GAMMA", 0.99)
+    clip_epsilon = config.get("CLIP_EPSILON", 0.2)
 
     for i in range(config["NUM_AGENTS"]):
         agent = f"agent_{i}"
@@ -49,7 +50,7 @@ def make_train(config):
         variables = model.init(rng, dummy_obs)
         params[agent] = variables
         models[agent] = model
-        optimizers[agent] = optax.adam(config["LR"])
+        optimizers[agent] = optax.chain(optax.clip_by_global_norm(config["MAX_GRAD_NORM"]), optax.adam(config["LR"], eps=1e-5))
         opt_state[agent] = optimizers[agent].init(variables)
 
     # === ACTION FUNCTION ===
@@ -60,14 +61,14 @@ def make_train(config):
         return action, value, log_prob
     
     # === LOSS FUNCTION ===
-    def loss_fn(params, model, obs, action, advantage, old_log_prob, returns, entropy_coef=0.05):
+    def loss_fn(params, model, obs, action, advantage, old_log_prob, returns, entropy_coef, clip_epsilon):
         pi, value = model.apply(params, obs)
         new_log_prob = pi.log_prob(action)
         ratio = jnp.exp(new_log_prob - old_log_prob)
-        clipped_ratio = jnp.clip(ratio, 0.8, 1.2)
+        clipped_ratio = jnp.clip(ratio, 1 - clip_epsilon, 1 + clip_epsilon)
         actor_loss = -jnp.minimum(ratio * advantage, clipped_ratio * advantage)
         critic_loss = (returns - value) ** 2
-        entropy_bonus = pi.entropy() 
+        entropy_bonus = pi.entropy()
         loss = actor_loss + 0.5 * critic_loss - entropy_coef * entropy_bonus
         return loss.mean()
     
@@ -102,7 +103,6 @@ def make_train(config):
 
                     obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
                     
-
                     # PPO Step (1-step advantage)
                     for agent in env.agents:
                         obs_agent = jnp.array(obs_env[agent])[None, ...]
@@ -111,6 +111,7 @@ def make_train(config):
                         next_obs_agent = jnp.array(obs_next[agent])[None, ...]
                         _, next_value = models[agent].apply(params[agent], next_obs_agent)
                         advantage = rew + gamma * next_value - values[agent]
+                        advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-8)
                         returns = rew + gamma * next_value
 
                         def grad_loss(p):
@@ -125,6 +126,79 @@ def make_train(config):
                     obs_env = obs_next
 
                 for agent in env.agents:
+                    rewards[epoch][env_idx][agent] = infos[agent]["cumulated_modified_reward"].item()
+                    pure_rewards[epoch][env_idx][agent] = infos[agent]["cumulated_pure_reward"].item()
+                    action_stats_total[epoch][env_idx][agent] = infos[agent]["cumulated_action_stats"]
+
+                states[env_idx] = state
+                obs[env_idx] = obs_env
+
+            elif config["TRAINING_TYPE"] == 'AC_Minibatches':
+                done = False
+                trajectory = {
+                    agent: {"obs": [], "actions": [], "log_probs": [], "rewards": [], "values": []}
+                    for agent in env.agents
+                }
+
+                while not done:
+                    actions, values, log_probs = {}, {}, {}
+
+                    for i in enumerate(env.agents):
+                        agent = f"agent_{i[0]}"
+                        obs_agent = jnp.array(obs_env[agent])[None, ...]
+                        key, subkey = jax.random.split(key)
+                        action, value, log_prob = select_action(models[agent], params[agent], obs_agent, subkey)
+                        actions[agent] = action
+                        values[agent] = value
+                        log_probs[agent] = log_prob
+
+                        trajectory[agent]["obs"].append(obs_agent)
+                        trajectory[agent]["actions"].append(action)
+                        trajectory[agent]["log_probs"].append(log_prob)
+                        trajectory[agent]["values"].append(value)
+
+                    obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
+
+                    for agent in env.agents:
+                        trajectory[agent]["rewards"].append(reward[agent])
+
+                    done = dones["__all__"]
+                    state = state_next
+                    obs_env = obs_next
+
+                for agent in env.agents:
+                    obs_batch = jnp.concatenate(trajectory[agent]["obs"], axis=0)
+                    action_batch = jnp.stack(trajectory[agent]["actions"])
+                    log_prob_batch = jnp.stack(trajectory[agent]["log_probs"])
+                    value_batch = jnp.stack(trajectory[agent]["values"]).squeeze()
+                    reward_batch = jnp.array(trajectory[agent]["rewards"])
+
+                    returns = jnp.cumsum(reward_batch[::-1])[::-1]
+                    advantage = returns - value_batch
+                    advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
+
+                    minibatch_size = config["MINIBATCH_SIZE"]
+                    num_minibatches = len(obs_batch) // minibatch_size
+
+                    for _ in range(config["MINIBATCH_EPOCHS"]):
+                        perm = jax.random.permutation(key, len(obs_batch))
+                        for i in range(num_minibatches):
+                            idx = perm[i * minibatch_size:(i + 1) * minibatch_size]
+                            def grad_loss(p):
+                                return loss_fn(
+                                    p, models[agent],
+                                    obs_batch[idx],
+                                    action_batch[idx],
+                                    advantage[idx],
+                                    log_prob_batch[idx],
+                                    returns[idx],
+                                    entropy_coef,
+                                    clip_epsilon
+                                )
+                            grads = jax.grad(grad_loss)(params[agent])
+                            updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
+                            params[agent] = optax.apply_updates(params[agent], updates)
+
                     rewards[epoch][env_idx][agent] = infos[agent]["cumulated_modified_reward"].item()
                     pure_rewards[epoch][env_idx][agent] = infos[agent]["cumulated_pure_reward"].item()
                     action_stats_total[epoch][env_idx][agent] = infos[agent]["cumulated_action_stats"]
