@@ -212,8 +212,8 @@ class CoinGame(MultiAgentEnv):
 
         def _classify_action(pos, coin_pos, got_coin):
             """Devuelve un vector one-hot de 5 elementos para la acción realizada"""
-            own_adjacent = _is_adjacent(pos[0], coin_pos[0])
-            other_adjacent = _is_adjacent(pos[0], coin_pos[1])
+            own_adjacent = _is_adjacent(pos, coin_pos[0])
+            other_adjacent = _is_adjacent(pos, coin_pos[1])
 
             if got_coin == 0:  # own
                 return jnp.array([1, 0, 0, 0, 0])
@@ -313,7 +313,7 @@ class CoinGame(MultiAgentEnv):
             next_blue_defect = state.blue_defect + jnp.zeros(
                 num_outer_steps, dtype=jnp.int8
             ).at[state.outer_t].set(blue_red_matches.item())
-
+        
             red_stats = _classify_action(
                 new_red_pos,
                 (state.red_coin_pos, state.blue_coin_pos),
