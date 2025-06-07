@@ -1,41 +1,21 @@
-import numpy as np
+import equinox as eqx
 import jax.numpy as jnp
-from flax import linen as nn
-from flax.linen.initializers import constant, orthogonal
-import distrax 
-from typing import NamedTuple
+import jax.random as jr
 
 # === NETWORK DEFINITION ===
-class ActorCritic(nn.Module):
-    action_dim: int
-    activation: str = "tanh"
+class ActorCritic(eqx.Module):
+    actor: eqx.nn.MLP
+    critic: eqx.nn.MLP
 
-    @nn.compact
-    def __call__(self, x):
-        act_fn = nn.relu if self.activation == "relu" else nn.tanh
+    def __init__(self, obs_shape, n_actions, key, hidden_sizes=(256, 256, 128)):
+        key1, key2 = jr.split(key)
+        flat_obs_dim = int(jnp.prod(jnp.array(obs_shape)))
 
-        # Actor
-        a = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-        a = act_fn(a)
-        a = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(a)
-        a = act_fn(a)
-        logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(a)
-        pi = distrax.Categorical(logits=logits)
+        self.actor = eqx.nn.MLP(flat_obs_dim, n_actions, hidden_sizes, key=key1)
+        self.critic = eqx.nn.MLP(flat_obs_dim, 1, hidden_sizes, key=key2)
 
-        # Critic
-        c = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-        c = act_fn(c)
-        c = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(c)
-        c = act_fn(c)
-        value = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(c)
-
-        return pi, jnp.squeeze(value, axis=-1)
-    
-class Transition(NamedTuple):
-    done: jnp.ndarray
-    action: jnp.ndarray
-    value: jnp.ndarray
-    reward: jnp.ndarray
-    log_prob: jnp.ndarray
-    obs: jnp.ndarray
-    info: jnp.ndarray
+    def __call__(self, obs):
+        x = jnp.ravel(obs)  # Flatten (e.g., grid or spatial obs)
+        logits = self.actor(x)
+        value = self.critic(x).squeeze()
+        return logits, value

@@ -1,13 +1,18 @@
-import jax #pip install jax
+import jax
 import jax.numpy as jnp
+from jax import random, jit, value_and_grad
+from jax import lax
 import optax
 import csv
 import os
 import pickle
-import jaxmarl
 from datetime import datetime
 from jaxmarl import make
 from jaxmarl.environments.coin_game.actor_critic import ActorCritic
+
+def actor_critic_fn(obs_shape, n_actions, key):
+    model = ActorCritic(obs_shape, n_actions, key)
+    return model, lambda params, obs: model(obs)
 
 def make_train(config):
     current_date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -31,271 +36,165 @@ def make_train(config):
         grid_size = config["GRID_SIZE"],
         reward_coef = config["REWARD_COEF"]
         ) for _ in range(config["NUM_ENVS"])]
-    states = [env.reset(k)[1] for env, k in zip(envs, keys)]
-    obs = [env.reset(k)[0] for env, k in zip(envs, keys)]
+    
+    env = envs[0]
+    agents = env.possible_agents
+    obs_shape = env.observation_space(agents[0]).shape
+    n_actions = env.action_space(agents[0]).n
 
-    # === INIT NETWORKS, OPTIMIZERS ===
-    params, opt_state, models, optimizers = {}, {}, {}, {}
-    example_env = envs[0]
-    action_dim = example_env.action_space("agent_0").n
-    entropy_coef = config.get("ENTROPY_COEF", 0.01)
-    gamma = config.get("GAMMA", 0.99)
-    clip_epsilon = config.get("CLIP_EPSILON", 0.2)
-
-    for i in range(config["NUM_AGENTS"]):
-        agent = f"agent_{i}"
-        model = ActorCritic(action_dim=action_dim)
-        dummy_obs = jnp.zeros(example_env.observation_space().shape)[None, ...]
-        rng = jax.random.PRNGKey(42 + i)
-        variables = model.init(rng, dummy_obs)
-        params[agent] = variables
-        models[agent] = model
-        optimizers[agent] = optax.chain(optax.clip_by_global_norm(config["MAX_GRAD_NORM"]), optax.adam(config["LR"], eps=1e-5))
-        opt_state[agent] = optimizers[agent].init(variables)
+    model_params, model_apply, opt_state, optimizer = {}, {}, {}, {}
+    for i, agent in enumerate(agents):
+        key = random.PRNGKey(42 + i)
+        model, apply_fn = actor_critic_fn(obs_shape, n_actions, key)
+        model_params[agent] = model.params
+        model_apply[agent] = apply_fn
+        optimizer[agent] = optax.adam(config["LR"])
+        opt_state[agent] = optimizer[agent].init(model_params[agent])
 
     # === ACTION FUNCTION ===
-    def select_action(model, params, obs, key):
-        pi, value = model.apply(params, obs)
-        action = pi.sample(seed=key)
-        log_prob = pi.log_prob(action)
-        return action, value, log_prob
+    @jit
+    def select_action(params, obs, key, apply_fn):
+        logits, value = apply_fn(params, obs)
+        probs = jax.nn.softmax(logits)
+        action = jax.random.categorical(key, logits)
+        log_prob = jnp.log(probs[action])
+        return action, log_prob, value
     
     # === LOSS FUNCTION ===
-    def loss_fn(params, model, obs, action, advantage, old_log_prob, returns, entropy_coef, clip_epsilon):
-        pi, value = model.apply(params, obs)
-        new_log_prob = pi.log_prob(action)
-        ratio = jnp.exp(new_log_prob - old_log_prob)
-        clipped_ratio = jnp.clip(ratio, 1 - clip_epsilon, 1 + clip_epsilon)
-        actor_loss = -jnp.minimum(ratio * advantage, clipped_ratio * advantage)
-        critic_loss = (returns - value) ** 2
-        entropy_bonus = pi.entropy()
-        loss = actor_loss + 0.5 * critic_loss - entropy_coef * entropy_bonus
-        return loss.mean()
+    @jit
+    def compute_loss(params, obs, actions, advantages, returns, apply_fn):
+        logits, values = apply_fn(params, obs)
+        log_probs = jax.nn.log_softmax(logits)
+        chosen_log_probs = jnp.sum(log_probs * jax.nn.one_hot(actions, logits.shape[-1]), axis=-1)
+        policy_loss = -jnp.mean(chosen_log_probs * advantages)
+        value_loss = jnp.mean((returns - values) ** 2)
+        entropy_loss = -jnp.mean(jnp.sum(jax.nn.softmax(logits) * log_probs, axis=-1))
+        return policy_loss + 0.5 * value_loss - 0.01 * entropy_loss
+    
+    # === COMPUTE ADVANTAGE ===
+    @jit
+    def compute_gae(rewards, values, gamma):
+        next_values = jnp.concatenate([values[1:], jnp.array([0.0])])
+        deltas = rewards + gamma * next_values - values
+
+        def scan_fn(carry, delta):
+            gae = delta + gamma * carry
+            return gae, gae
+
+        _, gaes = lax.scan(scan_fn, 0.0, deltas[::-1])
+        gaes = gaes[::-1]
+        returns = gaes + values
+        return returns, gaes
+    
+    # === TRAINING UPDATE ===
+    @jit
+    def train_minibatches(params, opt_state, obs_batch, action_batch, advantage, return_batch, key, apply_fn, optimizer, minibatch_size, epochs):
+        num_minibatches = obs_batch.shape[0] // minibatch_size
+
+        def epoch_step(carry, _):
+            params, opt_state, key = carry
+            key, subkey = random.split(key)
+            perm = random.permutation(subkey, obs_batch.shape[0])
+
+            def minibatch_step(carry, i):
+                params, opt_state = carry
+                idx = perm[i * minibatch_size:(i + 1) * minibatch_size]
+                batch_obs = obs_batch[idx]
+                batch_actions = action_batch[idx]
+                batch_adv = advantage[idx]
+                batch_returns = return_batch[idx]
+
+                loss, grads = value_and_grad(compute_loss)(params, batch_obs, batch_actions, batch_adv, batch_returns, apply_fn)
+                updates, opt_state = optimizer.update(grads, opt_state)
+                params = optax.apply_updates(params, updates)
+                return (params, opt_state), loss
+
+            (params, opt_state), _ = lax.scan(minibatch_step, (params, opt_state), jnp.arange(num_minibatches))
+            return (params, opt_state, key), None
+
+        (params, opt_state, _), _ = lax.scan(epoch_step, (params, opt_state, key), None, length=epochs)
+        return params, opt_state
     
     # === LOGGING INIT ===
-    rewards, pure_rewards, action_stats_total = {}, {}, {}
+    states = [env.reset(seed=i)[0] for i, env in enumerate(envs)]
+    observations = [env.observe(state) for env, state in zip(envs, states)]
     csv_path = os.path.join(path, "training_stats.csv")
     write_header = not os.path.exists(csv_path)
 
     # === TRAINING LOOP ===
     for epoch in range(config["NUM_EPOCHS"]):
-        rewards[epoch], pure_rewards[epoch], action_stats_total[epoch] = {}, {}, {}
-
         for env_idx, env in enumerate(envs):
-            rewards[epoch][env_idx], pure_rewards[epoch][env_idx], action_stats_total[epoch][env_idx] = {}, {}, {}
             state = states[env_idx]
-            obs_env = obs[env_idx]
-            key = jax.random.PRNGKey(epoch * 100 + env_idx)
+            obs_env = observations[env_idx]
+            done = False
+            key = random.PRNGKey(epoch * 100 + env_idx)
 
-            if config["TRAINING_TYPE"] == 'AC_Step':
-                done = False
+            trajectory = {agent: {"obs": [], "actions": [], "log_probs": [], "rewards": [], "values": []}
+                          for agent in env.agents}
 
-                while not done:
-                    actions, values, log_probs = {}, {}, {}
-                    for i in enumerate(env.agents):
-                        agent = f"agent_{i[0]}"
-                        obs_agent = jnp.array(obs_env[agent])[None, ...]
-                        key, subkey = jax.random.split(key)
-                        action, value, log_prob = select_action(models[agent], params[agent], obs_agent, subkey)
-                        actions[agent] = action
-                        values[agent] = value
-                        log_probs[agent] = log_prob
+            while not done:
+                actions, values, log_probs = {}, {}, {}
 
-                    obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
-                    
-                    # PPO Step (1-step advantage)
-                    for agent in env.agents:
-                        obs_agent = jnp.array(obs_env[agent])[None, ...]
-                        rew = reward[agent]
+                for i, agent in enumerate(env.agents):
+                    obs_agent = jnp.array(obs_env[agent])[None, ...]
+                    key, subkey = random.split(key)
+                    action, log_prob, value = select_action(model_params[agent], obs_agent, subkey, model_apply[agent])
+                    actions[agent] = int(action)
+                    trajectory[agent]["obs"].append(obs_agent)
+                    trajectory[agent]["actions"].append(action)
+                    trajectory[agent]["log_probs"].append(log_prob)
+                    trajectory[agent]["values"].append(value)
 
-                        next_obs_agent = jnp.array(obs_next[agent])[None, ...]
-                        _, next_value = models[agent].apply(params[agent], next_obs_agent)
-                        advantage = rew + gamma * next_value - values[agent]
-                        advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-8)
-                        returns = rew + gamma * next_value
-
-                        def grad_loss(p):
-                            return loss_fn(p, models[agent], obs_agent, actions[agent], advantage, log_probs[agent], returns, entropy_coef)
-
-                        grads = jax.grad(grad_loss)(params[agent])
-                        updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
-                        params[agent] = optax.apply_updates(params[agent], updates)
-
-                    done = dones["__all__"]
-                    state = state_next
-                    obs_env = obs_next
+                obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
 
                 for agent in env.agents:
-                    rewards[epoch][env_idx][agent] = infos[agent]["cumulated_modified_reward"].item()
-                    pure_rewards[epoch][env_idx][agent] = infos[agent]["cumulated_pure_reward"].item()
-                    action_stats_total[epoch][env_idx][agent] = infos[agent]["cumulated_action_stats"]
+                    trajectory[agent]["rewards"].append(reward[agent])
 
-                states[env_idx] = state
-                obs[env_idx] = obs_env
+                done = dones["__all__"]
+                state = state_next
+                obs_env = obs_next
 
-            elif config["TRAINING_TYPE"] == 'AC_Minibatches':
-                done = False
-                trajectory = {
-                    agent: {"obs": [], "actions": [], "log_probs": [], "rewards": [], "values": []}
-                    for agent in env.agents
-                }
+            for agent in env.agents:
+                obs_batch = jnp.concatenate(trajectory[agent]["obs"], axis=0)
+                action_batch = jnp.array(trajectory[agent]["actions"])
+                value_batch = jnp.array(trajectory[agent]["values"]).squeeze()
+                reward_batch = jnp.array(trajectory[agent]["rewards"])
 
-                while not done:
-                    actions, values, log_probs = {}, {}, {}
+                returns, advantage = compute_gae(reward_batch, value_batch, config["GAMMA"])
+                advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-8)
 
-                    for i in enumerate(env.agents):
-                        agent = f"agent_{i[0]}"
-                        obs_agent = jnp.array(obs_env[agent])[None, ...]
-                        key, subkey = jax.random.split(key)
-                        action, value, log_prob = select_action(models[agent], params[agent], obs_agent, subkey)
-                        actions[agent] = action
-                        values[agent] = value
-                        log_probs[agent] = log_prob
+                model_params[agent], opt_state[agent] = train_minibatches(
+                    model_params[agent],
+                    opt_state[agent],
+                    obs_batch,
+                    action_batch,
+                    advantage,
+                    returns,
+                    key,
+                    model_apply[agent],
+                    optimizer[agent],
+                    config["MINIBATCH_SIZE"],
+                    config["MINIBATCH_EPOCHS"]
+                )
 
-                        trajectory[agent]["obs"].append(obs_agent)
-                        trajectory[agent]["actions"].append(action)
-                        trajectory[agent]["log_probs"].append(log_prob)
-                        trajectory[agent]["values"].append(value)
-
-                    obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
-
-                    for agent in env.agents:
-                        trajectory[agent]["rewards"].append(reward[agent])
-
-                    done = dones["__all__"]
-                    state = state_next
-                    obs_env = obs_next
-
-                for agent in env.agents:
-                    obs_batch = jnp.concatenate(trajectory[agent]["obs"], axis=0)
-                    action_batch = jnp.stack(trajectory[agent]["actions"])
-                    log_prob_batch = jnp.stack(trajectory[agent]["log_probs"])
-                    value_batch = jnp.stack(trajectory[agent]["values"]).squeeze()
-                    reward_batch = jnp.array(trajectory[agent]["rewards"])
-
-                    returns = jnp.cumsum(reward_batch[::-1])[::-1]
-                    advantage = returns - value_batch
-                    advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
-
-                    minibatch_size = config["MINIBATCH_SIZE"]
-                    num_minibatches = len(obs_batch) // minibatch_size
-
-                    for _ in range(config["MINIBATCH_EPOCHS"]):
-                        perm = jax.random.permutation(key, len(obs_batch))
-                        for i in range(num_minibatches):
-                            idx = perm[i * minibatch_size:(i + 1) * minibatch_size]
-                            def grad_loss(p):
-                                return loss_fn(
-                                    p, models[agent],
-                                    obs_batch[idx],
-                                    action_batch[idx],
-                                    advantage[idx],
-                                    log_prob_batch[idx],
-                                    returns[idx],
-                                    entropy_coef,
-                                    clip_epsilon
-                                )
-                            grads = jax.grad(grad_loss)(params[agent])
-                            updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
-                            params[agent] = optax.apply_updates(params[agent], updates)
-
-                    rewards[epoch][env_idx][agent] = infos[agent]["cumulated_modified_reward"].item()
-                    pure_rewards[epoch][env_idx][agent] = infos[agent]["cumulated_pure_reward"].item()
-                    action_stats_total[epoch][env_idx][agent] = infos[agent]["cumulated_action_stats"]
-
-                states[env_idx] = state
-                obs[env_idx] = obs_env
-
-            elif config["TRAINING_TYPE"] == 'AC_Epoch':
-                done = False
-                trajectory = {
-                    agent: {
-                        "obs": [],
-                        "actions": [],
-                        "log_probs": [],
-                        "rewards": [],
-                        "values": [],
-                    }
-                    for agent in env.agents
-                }
-
-                while not done:
-                    actions, values, log_probs = {}, {}, {}
-
-                    for i in enumerate(env.agents):
-                        agent = f"agent_{i[0]}"
-                        obs_agent = jnp.array(obs_env[agent])[None, ...]
-                        key, subkey = jax.random.split(key)
-                        action, value, log_prob = select_action(models[agent], params[agent], obs_agent, subkey)
-                        actions[agent] = action
-                        values[agent] = value
-                        log_probs[agent] = log_prob
-
-                        trajectory[agent]["obs"].append(obs_agent)
-                        trajectory[agent]["actions"].append(action)
-                        trajectory[agent]["log_probs"].append(log_prob)
-                        trajectory[agent]["values"].append(value)
-
-                    obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
-
-                    for agent in env.agents:
-                        trajectory[agent]["rewards"].append(reward[agent])
-
-                    done = dones["__all__"]
-                    state = state_next
-                    obs_env = obs_next
-
-
-                # PPO update per agent after full episode
-                for agent in env.agents:
-                    obs_batch = jnp.concatenate(trajectory[agent]["obs"], axis=0)
-                    action_batch = jnp.stack(trajectory[agent]["actions"])
-                    log_prob_batch = jnp.stack(trajectory[agent]["log_probs"])
-                    value_batch = jnp.stack(trajectory[agent]["values"]).squeeze()
-                    reward_batch = jnp.array(trajectory[agent]["rewards"])
-
-                    # Simple return and advantage (no bootstrapping)
-                    returns = jnp.cumsum(reward_batch[::-1])[::-1]
-                    advantage = returns - value_batch
-                    advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
-
-                    def grad_loss(p):
-                        return loss_fn(p, models[agent], obs_batch, action_batch, advantage, log_prob_batch, returns, entropy_coef)
-
-                    grads = jax.grad(grad_loss)(params[agent])
-                    updates, opt_state[agent] = optimizers[agent].update(grads, opt_state[agent])
-                    params[agent] = optax.apply_updates(params[agent], updates)
-
-                    rewards[epoch][env_idx][agent] = infos[agent]["cumulated_modified_reward"].item()
-                    pure_rewards[epoch][env_idx][agent] = infos[agent]["cumulated_pure_reward"].item()
-                    action_stats_total[epoch][env_idx][agent] = infos[agent]["cumulated_action_stats"]
-
-                states[env_idx] = state
-                obs[env_idx] = obs_env
-            
-            else:
-                print('ERROR EN EL TRAINING_TYPE')
-                break
-        
+            stats = infos
             row = {
                 "epoch": epoch,
                 "env": env_idx,
-                "reward_agent_0": rewards[epoch][env_idx]["agent_0"],
-                "reward_agent_1": rewards[epoch][env_idx]["agent_1"],
-                "pure_reward_agent_0": float(pure_rewards[epoch][env_idx]["agent_0"]),
-                "pure_reward_agent_1": float(pure_rewards[epoch][env_idx]["agent_1"]),
-                "pure_reward_total": float(pure_rewards[epoch][env_idx]["agent_0"]) + float(pure_rewards[epoch][env_idx]["agent_1"]),
             }
 
-            for agent in ["agent_0", "agent_1"]:
-                stats = action_stats_total[epoch][env_idx][agent]
-                suffix = f"_{agent}"
+            for agent in env.agents:
                 row.update({
-                    "own_coin_collected" + suffix: int(stats[0]),
-                    "other_coin_collected" + suffix: int(stats[1]),
-                    "rejected_own" + suffix: int(stats[2]),
-                    "rejected_other" + suffix: int(stats[3]),
-                    "no_coin_visible" + suffix: int(stats[4]),
+                    f"reward_{agent}": float(infos[agent]["cumulated_modified_reward"]),
+                    f"pure_reward_{agent}": float(infos[agent]["cumulated_pure_reward"]),
+                })
+                a_stats = infos[agent]["cumulated_action_stats"]
+                row.update({
+                    f"own_coin_{agent}": int(a_stats[0]),
+                    f"other_coin_{agent}": int(a_stats[1]),
+                    f"reject_own_{agent}": int(a_stats[2]),
+                    f"reject_other_{agent}": int(a_stats[3]),
+                    f"no_coin_{agent}": int(a_stats[4]),
                 })
 
             with open(csv_path, "a", newline="") as f:
@@ -305,13 +204,11 @@ def make_train(config):
                     write_header = False
                 writer.writerow(row)
 
-            if epoch % config["SHOW_EVERY_N_EPOCHS"] == 0:
-                print(f"\nEpoch {epoch}:")
-                for agent in reward:
-                    print(f"  Pure reward of {agent} in env {env_idx} = {pure_rewards[epoch][env_idx][agent]:.2f}")
+        if epoch % config["SHOW_EVERY_N_EPOCHS"] == 0:
+            print(f"Epoch {epoch} complete.")
 
         if epoch % config["SAVE_EVERY_N_EPOCHS"] == 0:
             with open(os.path.join(path, f"params_epoch_{epoch}.pkl"), "wb") as f:
-                pickle.dump(params, f)
+                pickle.dump(model_params, f)
 
-    return params, current_date
+    return model_params, current_date

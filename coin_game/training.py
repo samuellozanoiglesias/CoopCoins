@@ -4,7 +4,7 @@ import pickle
 import sys
 import jax.numpy as jnp
 import numpy as np
-from jaxmarl.environments.coin_game.make_train_2 import make_train
+from jaxmarl.environments.coin_game.make_train import make_train
 
 # Leer archivo de entrada
 input_path = sys.argv[1]
@@ -26,7 +26,7 @@ NUM_EPOCHS = 1000
 NUM_AGENTS = 2
 SHOW_EVERY_N_EPOCHS = 100
 SAVE_EVERY_N_EPOCHS = 200
-LR = 5e-3
+LR = 1e-1
 GRID_SIZE = 3
 
 if dilemma:
