@@ -198,11 +198,11 @@ def make_train(config):
                 })
                 a_stats = infos[agent]["cumulated_action_stats"]
                 row.update({
-                    f"own_coin_{agent}": int(a_stats[0]),
-                    f"other_coin_{agent}": int(a_stats[1]),
-                    f"reject_own_{agent}": int(a_stats[2]),
-                    f"reject_other_{agent}": int(a_stats[3]),
-                    f"no_coin_{agent}": int(a_stats[4]),
+                    f"own_coin_collected_{agent}": int(a_stats[0]),
+                    f"other_coin_collected_{agent}": int(a_stats[1]),
+                    f"reject_own_coin_{agent}": int(a_stats[2]),
+                    f"reject_other_coin_{agent}": int(a_stats[3]),
+                    f"no_coin_visible_{agent}": int(a_stats[4]),
                 })
 
             with open(csv_path, "a", newline="") as f:
