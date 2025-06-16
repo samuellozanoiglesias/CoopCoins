@@ -21,5 +21,6 @@ from .mabrax import Ant, Humanoid, Hopper, Walker2d, HalfCheetah
 from .hanabi import Hanabi
 from .storm import InTheGrid, InTheGrid_2p, InTheMatrix
 from .coin_game import CoinGame
+from .coin_game import CoinGameEnvRLLIB
 from .jaxnav import JaxNav
 
