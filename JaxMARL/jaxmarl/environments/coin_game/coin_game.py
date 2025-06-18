@@ -15,14 +15,6 @@ class EnvState:
     blue_coin_pos: jnp.ndarray
     inner_t: int
     outer_t: int
-    # stats
-    red_coop: jnp.ndarray
-    red_defect: jnp.ndarray
-    blue_coop: jnp.ndarray
-    blue_defect: jnp.ndarray
-    counter: jnp.ndarray  # 9
-    coop1: jnp.ndarray  # 9
-    coop2: jnp.ndarray  # 9
     last_state: jnp.ndarray  # 2
     action_stats: jnp.ndarray
 
@@ -74,54 +66,15 @@ class CoinGame(MultiAgentEnv):
         self.payoff_matrix = payoff_matrix
         self.grid_size = grid_size
         self.reward_coef = reward_coef
-        self.cumulated_pure_rewards = {agent: 0.0 for agent in self.agents}
-        self.cumulated_modified_rewards = {agent: 0.0 for agent in self.agents}
-
-        # helper functions
-        def _update_stats(
-            state: EnvState,
-            rr: jnp.ndarray,
-            rb: jnp.ndarray,
-            br: jnp.ndarray,
-            bb: jnp.ndarray,
-        ):
-            def state2idx(s: jnp.ndarray) -> int:
-                idx = 0
-                idx = jnp.where((s == jnp.array([1, 1])).all(), 1, idx)
-                idx = jnp.where((s == jnp.array([1, 2])).all(), 2, idx)
-                idx = jnp.where((s == jnp.array([2, 1])).all(), 3, idx)
-                idx = jnp.where((s == jnp.array([2, 2])).all(), 4, idx)
-                idx = jnp.where((s == jnp.array([0, 1])).all(), 5, idx)
-                idx = jnp.where((s == jnp.array([0, 2])).all(), 6, idx)
-                idx = jnp.where((s == jnp.array([2, 0])).all(), 7, idx)
-                idx = jnp.where((s == jnp.array([1, 0])).all(), 8, idx)
-                return idx
-
-            # actions are S, C, D
-            a1 = 0
-            a1 = jnp.where(rr, 1, a1)
-            a1 = jnp.where(rb, 2, a1)
-
-            a2 = 0
-            a2 = jnp.where(bb, 1, a2)
-            a2 = jnp.where(br, 2, a2)
-
-            # if we didn't get a coin this turn, use the last convention
-            convention_1 = jnp.where(a1 > 0, a1, state.last_state[0])
-            convention_2 = jnp.where(a2 > 0, a2, state.last_state[1])
-
-            idx = state2idx(state.last_state)
-            counter = state.counter + jnp.zeros_like(
-                state.counter, dtype=jnp.int16
-            ).at[idx].set(1)
-            coop1 = state.coop1 + jnp.zeros_like(
-                state.counter, dtype=jnp.int16
-            ).at[idx].set(rr.item())
-            coop2 = state.coop2 + jnp.zeros_like(
-                state.counter, dtype=jnp.int16
-            ).at[idx].set(bb.item())
-            convention = jnp.stack([convention_1, convention_2]).reshape(2)
-            return counter, coop1, coop2, convention
+        self.num_inner_steps = num_inner_steps
+        self.num_outer_steps = num_outer_steps
+        self.cnn = cnn
+        self.egocentric = egocentric
+        
+        # Initialize all accumulated statistics as instance variables
+        self._cumulated_pure_rewards = {agent: 0.0 for agent in self.agents}
+        self._cumulated_modified_rewards = {agent: 0.0 for agent in self.agents}
+        self._cumulated_action_stats = {agent: jnp.zeros(5, dtype=jnp.int32) for agent in self.agents}
 
         def _abs_position(state: EnvState) -> jnp.ndarray:
             obs1 = jnp.zeros((self.grid_size, self.grid_size, 4), dtype=jnp.int8)
@@ -188,14 +141,6 @@ class CoinGame(MultiAgentEnv):
                         blue_coin_pos=state.red_coin_pos,
                         inner_t=0,
                         outer_t=0,
-                        red_coop=state.blue_coop,
-                        red_defect=state.blue_defect,
-                        blue_coop=state.red_coop,
-                        blue_defect=state.red_defect,
-                        last_state=state.last_state,
-                        counter=state.counter,
-                        coop1=state.coop1,
-                        coop2=state.coop2,
                     )
                 )
                 obs = (obs1, obs2)
@@ -293,14 +238,6 @@ class CoinGame(MultiAgentEnv):
                 red_blue_matches, blue_reward + _b_penalty, blue_reward
             )
 
-            (counter, coop1, coop2, last_state) = _update_stats(
-                state,
-                red_red_matches,
-                red_blue_matches,
-                blue_red_matches,
-                blue_blue_matches,
-            )
-
             key, subkey = jax.random.split(key)
             key, new_random_coin_poses = sample_two_valid_positions(
                 key, state.red_coin_pos, state.blue_coin_pos, self.grid_size
@@ -317,19 +254,6 @@ class CoinGame(MultiAgentEnv):
                 new_random_coin_poses[1],
                 state.blue_coin_pos,
             )
-
-            next_red_coop = state.red_coop + jnp.zeros(
-                num_outer_steps, dtype=jnp.int8
-            ).at[state.outer_t].set(red_red_matches.item())
-            next_red_defect = state.red_defect + jnp.zeros(
-                num_outer_steps, dtype=jnp.int8
-            ).at[state.outer_t].set(red_blue_matches.item())
-            next_blue_coop = state.blue_coop + jnp.zeros(
-                num_outer_steps, dtype=jnp.int8
-            ).at[state.outer_t].set(blue_blue_matches.item())
-            next_blue_defect = state.blue_defect + jnp.zeros(
-                num_outer_steps, dtype=jnp.int8
-            ).at[state.outer_t].set(blue_red_matches.item())
         
             red_stats = _classify_action(
                 new_red_pos,
@@ -343,7 +267,16 @@ class CoinGame(MultiAgentEnv):
                 jnp.where(blue_blue_matches, 0, jnp.where(blue_red_matches, 1, -1))
             )
 
-            new_action_stats = state.action_stats + jnp.stack([red_stats, blue_stats])
+            # Just store the current step's stats, don't accumulate here
+            new_action_stats = jnp.stack([red_stats, blue_stats])
+
+            last_state = _update_stats(
+                state,
+                red_red_matches,
+                red_blue_matches,
+                blue_red_matches,
+                blue_blue_matches,
+            )
 
             next_state = EnvState(
                 red_pos=new_red_pos,
@@ -352,15 +285,8 @@ class CoinGame(MultiAgentEnv):
                 blue_coin_pos=new_blue_coin_pos,
                 inner_t=state.inner_t + 1,
                 outer_t=state.outer_t,
-                red_coop=next_red_coop,
-                red_defect=next_red_defect,
-                blue_coop=next_blue_coop,
-                blue_defect=next_blue_defect,
-                counter=counter,
-                coop1=coop1,
-                coop2=coop2,
                 last_state=last_state,
-                action_stats=new_action_stats,
+                action_stats=new_action_stats
             )
 
             obs = _state_to_obs(next_state)
@@ -369,6 +295,11 @@ class CoinGame(MultiAgentEnv):
             inner_t = next_state.inner_t
             outer_t = next_state.outer_t
             reset_inner = inner_t == num_inner_steps
+
+            # Get current accumulated values before any reset
+            cumulated_pure_rewards = {k: v for k, v in self._cumulated_pure_rewards.items()}
+            cumulated_modified_rewards = {k: v for k, v in self._cumulated_modified_rewards.items()}
+            cumulated_action_stats = {k: v for k, v in self._cumulated_action_stats.items()}
 
             # if inner episode is done, return start state for next game
             reset_obs, reset_state = _reset(key)
@@ -393,15 +324,8 @@ class CoinGame(MultiAgentEnv):
                     reset_inner, jnp.zeros_like(inner_t), next_state.inner_t
                 ),
                 outer_t=jnp.where(reset_inner, outer_t + 1, outer_t),
-                red_coop=next_state.red_coop,
-                red_defect=next_state.red_defect,
-                blue_coop=next_state.blue_coop,
-                blue_defect=next_state.blue_defect,
-                counter=counter,
-                coop1=coop1,
-                coop2=coop2,
                 last_state=jnp.where(reset_inner, jnp.zeros(2), last_state),
-                action_stats = jnp.where(reset_inner, jnp.zeros((2, 5), dtype=jnp.int32), new_action_stats)
+                action_stats=jnp.where(reset_inner, jnp.zeros((2, 5), dtype=jnp.int32), new_action_stats)
             )
 
             obs = {agent: obs for agent, obs in zip(self.agents, [jnp.where(reset_inner, reset_obs[i], obs[i]) for i in obs])}
@@ -413,27 +337,30 @@ class CoinGame(MultiAgentEnv):
 
             pure_rewards = {"agent_0": red_reward, "agent_1": blue_reward}
 
-            # update cumulated rewards
+            # Update cumulated rewards and stats
             for agent in self.agents:
-                self.cumulated_pure_rewards[agent] += pure_rewards[agent]
-                self.cumulated_modified_rewards[agent] += rewards[agent]
-
-            # Copy data before resetting
-            cumulated_pure_rewards = {k: v.copy() for k, v in self.cumulated_pure_rewards.items()}
-            cumulated_modified_rewards = {k: v.copy() for k, v in self.cumulated_modified_rewards.items()}
-
-            for agent in self.agents:
-                self.cumulated_pure_rewards[agent] = jnp.where(reset_inner, 0.0, self.cumulated_pure_rewards[agent])
-                self.cumulated_modified_rewards[agent] = jnp.where(reset_inner, 0.0, self.cumulated_modified_rewards[agent])
-
-            cumulated_action_stats = {
-                agent: new_action_stats[i]
-                for i, agent in enumerate(self.agents)
-            }
+                # Only update if not resetting
+                self._cumulated_pure_rewards[agent] = jnp.where(
+                    reset_inner,
+                    0.0,
+                    self._cumulated_pure_rewards[agent] + pure_rewards[agent]
+                )
+                self._cumulated_modified_rewards[agent] = jnp.where(
+                    reset_inner,
+                    0.0,  
+                    self._cumulated_modified_rewards[agent] + rewards[agent]
+                )
+                # For action stats, we need to handle each agent's stats separately
+                agent_idx = self.agents.index(agent)
+                self._cumulated_action_stats[agent] = jnp.where(
+                    reset_inner,
+                    jnp.zeros(5, dtype=jnp.int32),
+                    self._cumulated_action_stats[agent] + new_action_stats[agent_idx]
+                )
 
             dones = {agent: reset_inner for agent in self.agents}
             dones['__all__'] = reset_inner
-            
+
             infos = {
                 agent: {
                     "cumulated_pure_reward": cumulated_pure_rewards[agent],
@@ -455,32 +382,51 @@ class CoinGame(MultiAgentEnv):
             key: jnp.ndarray
         ) -> Tuple[jnp.ndarray, EnvState]:
             key, subkey = jax.random.split(key)
-            all_pos = jax.random.randint(
-                subkey, shape=(4, 2), minval=0, maxval=self.grid_size
+            # First get random positions for agents
+            agent_pos = jax.random.randint(
+                subkey, shape=(2, 2), minval=0, maxval=self.grid_size
+            )
+            
+            # Then get valid positions for coins using sample_two_valid_positions
+            key, coin_pos = sample_two_valid_positions(
+                key, agent_pos[0], agent_pos[1], self.grid_size
             )
 
-            empty_stats = jnp.zeros((num_outer_steps), dtype=jnp.int8)
-            state_stats = jnp.zeros(self.grid_size * self.grid_size)
-
             state = EnvState(
-                red_pos=all_pos[0, :],
-                blue_pos=all_pos[1, :],
-                red_coin_pos=all_pos[2, :],
-                blue_coin_pos=all_pos[3, :],
+                red_pos=agent_pos[0, :],
+                blue_pos=agent_pos[1, :],
+                red_coin_pos=coin_pos[0],
+                blue_coin_pos=coin_pos[1],
                 inner_t=0,
                 outer_t=0,
-                red_coop=empty_stats,
-                red_defect=empty_stats,
-                blue_coop=empty_stats,
-                blue_defect=empty_stats,
-                counter=state_stats,
-                coop1=state_stats,
-                coop2=state_stats,
                 last_state=jnp.zeros(2),
                 action_stats = jnp.zeros((2, 5), dtype=jnp.int32)
             )
             obs = _state_to_obs(state)
             return obs, state
+
+        def _update_stats(
+            state: EnvState,
+            rr: jnp.ndarray,
+            rb: jnp.ndarray,
+            br: jnp.ndarray,
+            bb: jnp.ndarray,
+        ):
+            # actions are S, C, D
+            a1 = 0
+            a1 = jnp.where(rr, 1, a1)
+            a1 = jnp.where(rb, 2, a1)
+
+            a2 = 0
+            a2 = jnp.where(bb, 1, a2)
+            a2 = jnp.where(br, 2, a2)
+
+            # if we didn't get a coin this turn, use the last convention
+            convention_1 = jnp.where(a1 > 0, a1, state.last_state[0])
+            convention_2 = jnp.where(a2 > 0, a2, state.last_state[1])
+
+            convention = jnp.stack([convention_1, convention_2]).reshape(2)
+            return convention
 
         # overwrite Gymnax as it makes single-agent assumptions
         self.step = jax.jit(_step)

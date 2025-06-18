@@ -46,12 +46,21 @@ def make_train(config):
 
     models, models_params, opt_state, optimizer = {}, {}, {}, {}
     keys_agents = jax.random.split(jax.random.PRNGKey(0), config["NUM_AGENTS"])
+    # === OPTIMIZER ===
+    lr_schedule = optax.linear_schedule(
+        init_value=config["LR"],
+        end_value=config["LR"] * 0.1,
+        transition_steps=config["NUM_EPOCHS"]
+    )
     for i, agent in enumerate(agents):
         key = keys_agents[i]
         model = actor_critic_fn(obs_shape, n_actions, key)
         models[agent] = model
         models_params[agent] = eqx.filter(model, eqx.is_array)
-        optimizer[agent] = optax.adam(config["LR"])
+        optimizer[agent] = optax.chain(
+            optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
+            optax.adam(lr_schedule)
+        )
         opt_state[agent] = optimizer[agent].init(models_params[agent])
 
     # === ACTION FUNCTION ===
@@ -65,12 +74,23 @@ def make_train(config):
     
     # === LOSS FUNCTION ===
     @jit
-    def compute_loss(model, obs, actions, advantages, returns, value_coef, entropy_coef):
+    def compute_loss(model, obs, actions, advantages, returns, value_coef, entropy_coef, clip_eps, old_log_probs):
         logits, values = model(obs)
         log_probs = jax.nn.log_softmax(logits)
         chosen_log_probs = jnp.sum(log_probs * jax.nn.one_hot(actions, logits.shape[-1]), axis=-1)
-        policy_loss = -jnp.mean(chosen_log_probs * advantages)
-        value_loss = jnp.mean((returns - values) ** 2)
+        
+        # PPO clipping
+        ratio = jnp.exp(chosen_log_probs - old_log_probs)
+        policy_loss1 = -ratio * advantages
+        policy_loss2 = -jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
+        policy_loss = jnp.mean(jnp.maximum(policy_loss1, policy_loss2))
+        
+        # Value function clipping
+        value_pred_clipped = values + jnp.clip(values - values, -clip_eps, clip_eps)
+        value_losses = jnp.square(returns - values)
+        value_losses_clipped = jnp.square(returns - value_pred_clipped)
+        value_loss = 0.5 * jnp.mean(jnp.maximum(value_losses, value_losses_clipped))
+        
         entropy_loss = -jnp.mean(jnp.sum(jax.nn.softmax(logits) * log_probs, axis=-1))
         return policy_loss + value_coef * value_loss - entropy_coef * entropy_loss
     
@@ -90,12 +110,12 @@ def make_train(config):
         return returns, gaes
     
     # === TRAINING UPDATE ===
-    def train_minibatches(model, opt_state, obs_batch, action_batch, advantage, return_batch, key, optimizer, minibatch_size, epochs):
+    def train_minibatches(model, opt_state, obs_batch, action_batch, advantage, return_batch, key, optimizer, minibatch_size, epochs, clip_eps, old_log_probs):
         num_minibatches = obs_batch.shape[0] // minibatch_size
 
         def compute_loss_batch(model, obs, actions, adv, returns):
             def single_loss(m, o, a, ad, r):
-                return compute_loss(m, o, a, ad, r, config["VF_COEF"], config["ENT_COEF"])
+                return compute_loss(m, o, a, ad, r, config["VF_COEF"], config["ENT_COEF"], clip_eps, old_log_probs)
             losses = jax.vmap(single_loss, in_axes=(None, 0, 0, 0, 0))(model, obs, actions, adv, returns)
             return losses.mean()
 
@@ -114,15 +134,17 @@ def make_train(config):
                 batch_returns = return_batch[idx]
 
                 loss, grads = value_and_grad(compute_loss_batch)(model, batch_obs, batch_actions, batch_adv, batch_returns)
+                # Compute gradient norm for monitoring
+                grad_norm = jnp.sqrt(sum(jnp.sum(jnp.square(g)) for g in jax.tree_util.tree_leaves(grads)))
                 updates, opt_state = optimizer.update(grads, opt_state)
                 model = optax.apply_updates(model, updates)
-                return (model, opt_state), loss
+                return (model, opt_state), (loss, grad_norm)
 
-            (model, opt_state), _ = lax.scan(minibatch_step, (model, opt_state), jnp.arange(num_minibatches))
-            return (model, opt_state, key), None
+            (model, opt_state), (losses, grad_norms) = lax.scan(minibatch_step, (model, opt_state), jnp.arange(num_minibatches))
+            return (model, opt_state, key), (losses, grad_norms)
 
-        (model, opt_state, _), _ = lax.scan(epoch_step, (model, opt_state, key), None, length=epochs)
-        return model, opt_state
+        (model, opt_state, _), (losses, grad_norms) = lax.scan(epoch_step, (model, opt_state, key), None, length=epochs)
+        return model, opt_state, (losses, grad_norms)
 
     # Create a JIT-compiled version with static optimizer, epochs, and minibatch_size
     train_minibatches_jit = jit(train_minibatches, static_argnums=(7, 8, 9), static_argnames=('optimizer', 'minibatch_size', 'epochs'))
@@ -180,7 +202,7 @@ def make_train(config):
                 returns, advantage = compute_gae(reward_batch, value_batch, config["GAMMA"], config["GAE_LAMBDA"])
                 advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-8)
 
-                models[agent], opt_state[agent] = train_minibatches_jit(
+                models[agent], opt_state[agent], (losses, grad_norms) = train_minibatches_jit(
                     models[agent],
                     opt_state[agent],
                     obs_batch,
@@ -190,10 +212,16 @@ def make_train(config):
                     key,
                     optimizer=optimizer[agent],
                     minibatch_size=config["MINIBATCH_SIZE"],
-                    epochs=config["NUM_UPDATES_PER_MINIBATCH"]
+                    epochs=config["NUM_UPDATES_PER_MINIBATCH"],
+                    clip_eps=config["CLIP_EPS"],
+                    old_log_probs=jnp.array(trajectory[agent]["log_probs"])
                 )
 
-            stats = infos
+                # Add loss and gradient monitoring to stats
+                stats = infos
+                stats[agent]["mean_loss"] = float(jnp.mean(losses))
+                stats[agent]["mean_grad_norm"] = float(jnp.mean(grad_norms))
+
             row = {
                 "epoch": epoch,
                 "env": env_idx,
@@ -203,6 +231,8 @@ def make_train(config):
                 row.update({
                     f"reward_{agent}": float(infos[agent]["cumulated_modified_reward"]),
                     f"pure_reward_{agent}": float(infos[agent]["cumulated_pure_reward"]),
+                    f"mean_loss_{agent}": float(stats[agent]["mean_loss"]),
+                    f"mean_grad_norm_{agent}": float(stats[agent]["mean_grad_norm"]),
                 })
                 a_stats = infos[agent]["cumulated_action_stats"]
                 row.update({

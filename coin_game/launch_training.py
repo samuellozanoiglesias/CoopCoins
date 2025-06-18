@@ -6,7 +6,7 @@ os.chdir(r"D:\OneDrive - Universidad Complutense de Madrid (UCM)\Doctorado\hfsp_
 
 angles_1 = np.arange(270, 360, 45)
 dilemma = 1  # Set to 1 for dilemma, 0 for no dilemma
-learning_rates = [2e-3]
+learning_rates = [1e-5]
 grid_size = 3
 
 os.makedirs("inputs", exist_ok=True)

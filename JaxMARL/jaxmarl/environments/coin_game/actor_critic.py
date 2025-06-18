@@ -10,13 +10,19 @@ class CustomMLP(eqx.Module):
         keys = jr.split(key, len(hidden_sizes) + 1)
         sizes = [in_size] + list(hidden_sizes) + [out_size]
         self.layers = []
+        
+        # Initialize layers with proper scaling
         for i in range(len(sizes) - 1):
+            # Use glorot initialization for better gradient flow
             layer = eqx.nn.Linear(sizes[i], sizes[i+1], key=keys[i])
+            # Scale the weights
+            layer = eqx.tree_at(lambda l: l.weight, layer, layer.weight * jnp.sqrt(2.0 / sizes[i]))
             self.layers.append(layer)
 
     def __call__(self, x):
         for layer in self.layers[:-1]:
-            x = jax.nn.tanh(layer(x))
+            x = layer(x)
+            x = jax.nn.tanh(x)  # Use tanh for bounded outputs
         x = self.layers[-1](x)
         return x
 
@@ -25,7 +31,7 @@ class ActorCritic(eqx.Module):
     actor: CustomMLP
     critic: CustomMLP
 
-    def __init__(self, obs_shape, n_actions, key, hidden_sizes=(64, 64, 16)):
+    def __init__(self, obs_shape, n_actions, key, hidden_sizes=(128, 128, 64)):
         key1, key2 = jr.split(key)
         flat_obs_dim = int(jnp.prod(jnp.array(obs_shape)))
 
