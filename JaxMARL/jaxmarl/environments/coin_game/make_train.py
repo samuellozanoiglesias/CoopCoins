@@ -55,7 +55,7 @@ def make_train(config):
         opt_state[agent] = optimizer[agent].init(models_params[agent])
 
     # === ACTION FUNCTION ===
-    #@jit
+    @jit
     def select_action(model, obs, key):
         logits, value = model(obs)
         probs = jax.nn.softmax(logits)
@@ -65,23 +65,23 @@ def make_train(config):
     
     # === LOSS FUNCTION ===
     @jit
-    def compute_loss(model, obs, actions, advantages, returns):
+    def compute_loss(model, obs, actions, advantages, returns, value_coef, entropy_coef):
         logits, values = model(obs)
         log_probs = jax.nn.log_softmax(logits)
         chosen_log_probs = jnp.sum(log_probs * jax.nn.one_hot(actions, logits.shape[-1]), axis=-1)
         policy_loss = -jnp.mean(chosen_log_probs * advantages)
         value_loss = jnp.mean((returns - values) ** 2)
         entropy_loss = -jnp.mean(jnp.sum(jax.nn.softmax(logits) * log_probs, axis=-1))
-        return policy_loss + 0.5 * value_loss - 0.01 * entropy_loss
+        return policy_loss + value_coef * value_loss - entropy_coef * entropy_loss
     
     # === COMPUTE ADVANTAGE ===
     @jit
-    def compute_gae(rewards, values, gamma):
+    def compute_gae(rewards, values, gamma, gae_lambda):
         next_values = jnp.concatenate([values[1:], jnp.array([0.0])])
         deltas = rewards + gamma * next_values - values
 
         def scan_fn(carry, delta):
-            gae = delta + gamma * carry
+            gae = delta + gamma * gae_lambda *carry
             return gae, gae
 
         _, gaes = lax.scan(scan_fn, 0.0, deltas[::-1])
@@ -90,13 +90,12 @@ def make_train(config):
         return returns, gaes
     
     # === TRAINING UPDATE ===
-    #@jit(static_argnames=("optimizer", "batch_size", "epochs"))
     def train_minibatches(model, opt_state, obs_batch, action_batch, advantage, return_batch, key, optimizer, minibatch_size, epochs):
         num_minibatches = obs_batch.shape[0] // minibatch_size
 
         def compute_loss_batch(model, obs, actions, adv, returns):
             def single_loss(m, o, a, ad, r):
-                return compute_loss(m, o, a, ad, r)
+                return compute_loss(m, o, a, ad, r, config["VF_COEF"], config["ENT_COEF"])
             losses = jax.vmap(single_loss, in_axes=(None, 0, 0, 0, 0))(model, obs, actions, adv, returns)
             return losses.mean()
 
@@ -124,6 +123,9 @@ def make_train(config):
 
         (model, opt_state, _), _ = lax.scan(epoch_step, (model, opt_state, key), None, length=epochs)
         return model, opt_state
+
+    # Create a JIT-compiled version with static optimizer, epochs, and minibatch_size
+    train_minibatches_jit = jit(train_minibatches, static_argnums=(7, 8, 9), static_argnames=('optimizer', 'minibatch_size', 'epochs'))
     
     # === LOGGING INIT ===
     states = [env.reset(k)[1] for env, k in zip(envs, keys_envs)]
@@ -175,10 +177,10 @@ def make_train(config):
                 value_batch = jnp.array(trajectory[agent]["values"]).squeeze()
                 reward_batch = jnp.array(trajectory[agent]["rewards"])
 
-                returns, advantage = compute_gae(reward_batch, value_batch, config["GAMMA"])
+                returns, advantage = compute_gae(reward_batch, value_batch, config["GAMMA"], config["GAE_LAMBDA"])
                 advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-8)
 
-                models[agent], opt_state[agent] = train_minibatches(
+                models[agent], opt_state[agent] = train_minibatches_jit(
                     models[agent],
                     opt_state[agent],
                     obs_batch,
@@ -186,9 +188,9 @@ def make_train(config):
                     advantage,
                     returns,
                     key,
-                    optimizer[agent],
-                    config["MINIBATCH_SIZE"],
-                    config["MINIBATCH_EPOCHS"]
+                    optimizer=optimizer[agent],
+                    minibatch_size=config["MINIBATCH_SIZE"],
+                    epochs=config["NUM_UPDATES_PER_MINIBATCH"]
                 )
 
             stats = infos

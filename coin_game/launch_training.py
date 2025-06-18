@@ -2,9 +2,11 @@ import os
 import numpy as np
 import subprocess
 
-angles_1 = np.arange(90, 360, 45)
-dilemma = 0  # Set to 1 for dilemma, 0 for no dilemma
-learning_rates = [1e-4, 1e-2]
+os.chdir(r"D:\OneDrive - Universidad Complutense de Madrid (UCM)\Doctorado\hfsp_overcooked_mod\coin_game")
+
+angles_1 = np.arange(270, 360, 45)
+dilemma = 1  # Set to 1 for dilemma, 0 for no dilemma
+learning_rates = [2e-3]
 grid_size = 3
 
 os.makedirs("inputs", exist_ok=True)
@@ -24,7 +26,8 @@ for angle_1 in angles_1:
 
         for lr in learning_rates:
             log_file = f"logs/out_{int(angle_1)}_{int(angle_2)}_lr{lr:.0e}.log"
-            print(f"Running training for angles {angle_1}-{angle_2} with LR={lr}")
+            print(f"Launching  training for angles {angle_1}-{angle_2} with LR={lr}")
+            
             subprocess.run(
                 ["python", "training.py", input_file, str(dilemma), str(lr), str(grid_size)],
                 stdout=open(log_file, "w"),

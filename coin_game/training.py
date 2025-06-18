@@ -19,25 +19,24 @@ with open(input_path, "r") as f:
 
 REWARD_COEF = [[alpha_1, beta_1], [alpha_2, beta_2]]
 
-brigit = '/mnt/lustre/home/samuloza'
+#local = '/mnt/lustre/home/samuloza'
+local = 'D:/OneDrive - Universidad Complutense de Madrid (UCM)/Doctorado'
 
 # Hiperparámetros
-NUM_ENVS = 1
+NUM_ENVS = 2
 NUM_INNER_STEPS = 50
-NUM_UPDATES_PER_EPOCH = 5
-NUM_EPOCHS = 3000
+NUM_UPDATES_PER_EPOCH = 10
+NUM_EPOCHS = 5000
 NUM_AGENTS = 2
 SHOW_EVERY_N_EPOCHS = 100
-SAVE_EVERY_N_EPOCHS = 500
-#LR = 1e-4
-#GRID_SIZE = 3
+SAVE_EVERY_N_EPOCHS = 250
 
 if DILEMMA:
     PAYOFF_MATRIX = [[1, 2, -3], [1, 2, -3]]
-    save_dir = f'{brigit}/data/samuel_lozano/coin_game/Prisioner_dilemma'
+    save_dir = f'{local}/data/samuel_lozano/coin_game/Prisioner_dilemma'
 else:
     PAYOFF_MATRIX = [[1, 1, -2], [1, 1, -2]]
-    save_dir = f'{brigit}/data/samuel_lozano/coin_game/No_dilemma'
+    save_dir = f'{local}/data/samuel_lozano/coin_game/No_dilemma'
 
 os.makedirs(save_dir, exist_ok=True)
 
@@ -53,12 +52,15 @@ config = {
     "GRID_SIZE": GRID_SIZE,
     "REWARD_COEF": REWARD_COEF,
     "SAVE_DIR": save_dir,
+    "GAMMA": 0.995,  # Discount factor
+    "GAE_LAMBDA": 0.95,  # GAE-Lambda parameter
+    "ENT_COEF": 0.01,  # Entropy coefficient
+    "CLIP_EPS": 0.2,  # PPO clip parameter
+    "VF_COEF": 0.5,  # Value function coefficient
     "MINIBATCH_SIZE": NUM_INNER_STEPS // NUM_UPDATES_PER_EPOCH,
-    "MINIBATCH_EPOCHS": 1,
-    "GAMMA": 0.995,
+    "NUM_UPDATES_PER_MINIBATCH": 10,
     "DEVICE": jax.devices()
 }
-
 
 params, current_date = make_train(config)
 
