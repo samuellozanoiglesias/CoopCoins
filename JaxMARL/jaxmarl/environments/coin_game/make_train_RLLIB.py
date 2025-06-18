@@ -8,6 +8,9 @@ from ray.tune.registry import register_env
 from datetime import datetime
 from jaxmarl import make
 import csv
+import numpy as np
+from gymnasium.spaces import Box, Discrete
+
 
 def env_creator(config):
     env = make("coin_game_env_RLLIB", 
@@ -42,6 +45,9 @@ def make_train_RLLIB(config):
     # Register the environment
     register_env("coin_game_env_RLLIB", env_creator)
 
+    # Create a temporary environment to get observation and action spaces
+    temp_env = env_creator(config)
+
     # Configure PPO
     ppo_config = (
         PPOConfig()
@@ -56,13 +62,31 @@ def make_train_RLLIB(config):
             clip_param=config["CLIP_EPS"],
             vf_clip_param=config["VF_COEF"],
             num_epochs=config["NUM_UPDATES"],
+            model={
+                "fcnet_hiddens": [64, 64, 16],
+                "fcnet_activation": "tanh",
+                "use_lstm": False,
+                "use_attention": False,
+            }
         )
         .framework("torch")
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False
+        )
         .debugging(log_level="INFO")
         .resources(num_gpus=0)  # Set to number of GPUs available
         .evaluation(
             evaluation_interval=config["SHOW_EVERY_N_EPOCHS"],
             evaluation_duration=10,
+        )
+        .multi_agent(
+            policies={
+                "agent_0": (None, temp_env.observation_spaces["agent_0"], temp_env.action_spaces["agent_0"], {}),
+                "agent_1": (None, temp_env.observation_spaces["agent_1"], temp_env.action_spaces["agent_1"], {})
+            },
+            policy_mapping_fn=lambda agent_id, episode, worker, **kwargs: agent_id,
+            policies_to_train=["agent_0", "agent_1"]
         )
     )
 

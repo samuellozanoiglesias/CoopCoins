@@ -225,6 +225,21 @@ class CoinGame(MultiAgentEnv):
                 return jnp.array([0, 0, 0, 1, 0])
             else:
                 return jnp.array([0, 0, 0, 0, 1])
+        
+        def sample_two_valid_positions(key, red_coin_pos, blue_coin_pos, grid_size):
+            all_positions = jnp.stack(jnp.meshgrid(jnp.arange(grid_size), jnp.arange(grid_size)), axis=-1).reshape(-1, 2)
+            
+            def is_invalid(pos):
+                return jnp.any(jnp.all(pos == red_coin_pos, axis=-1)) | jnp.any(jnp.all(pos == blue_coin_pos, axis=-1))
+    
+            valid_mask = ~jax.vmap(is_invalid)(all_positions)
+            valid_positions = all_positions[valid_mask]
+
+            key, subkey = jax.random.split(key)
+            permuted = jax.random.permutation(subkey, valid_positions.shape[0])
+            chosen = valid_positions[permuted[:2]]
+    
+            return key, chosen
             
         def _step(
             key: chex.PRNGKey,
@@ -254,8 +269,8 @@ class CoinGame(MultiAgentEnv):
             _rr_reward = self.payoff_matrix[0][0]
             _rb_reward = self.payoff_matrix[0][1]
             _r_penalty = self.payoff_matrix[0][2]
-            _br_reward = self.payoff_matrix[1][0]
-            _bb_reward = self.payoff_matrix[1][1]
+            _bb_reward = self.payoff_matrix[1][0]
+            _br_reward = self.payoff_matrix[1][1]
             _b_penalty = self.payoff_matrix[1][2]
 
             red_reward = jnp.where(
@@ -287,14 +302,16 @@ class CoinGame(MultiAgentEnv):
             )
 
             key, subkey = jax.random.split(key)
-            new_random_coin_poses = jax.random.randint(
-                subkey, shape=(2, 2), minval=0, maxval=self.grid_size
+            key, new_random_coin_poses = sample_two_valid_positions(
+                key, state.red_coin_pos, state.blue_coin_pos, self.grid_size
             )
+
             new_red_coin_pos = jnp.where(
                 jnp.logical_or(red_red_matches, blue_red_matches),
                 new_random_coin_poses[0],
                 state.red_coin_pos,
             )
+
             new_blue_coin_pos = jnp.where(
                 jnp.logical_or(red_blue_matches, blue_blue_matches),
                 new_random_coin_poses[1],

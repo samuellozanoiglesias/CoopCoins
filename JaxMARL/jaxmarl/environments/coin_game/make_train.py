@@ -20,6 +20,7 @@ def make_train(config):
     path = os.path.join(config["SAVE_DIR"], f"Training_{current_date}")
     os.makedirs(path, exist_ok=True)
     config["PATH"] = path
+    master_key = jax.random.PRNGKey(0)
 
     # Save config to file
     with open(os.path.join(path, "config.txt"), "w") as f:
@@ -132,6 +133,9 @@ def make_train(config):
 
     # === TRAINING LOOP ===
     for epoch in range(config["NUM_EPOCHS"]):
+        master_key, subkey = jax.random.split(master_key)
+        keys_envs = jax.random.split(subkey, config["NUM_ENVS"])
+
         for env_idx, env in enumerate(envs):
             state = states[env_idx]
             obs_env = observations[env_idx]
@@ -142,11 +146,13 @@ def make_train(config):
                           for agent in env.agents}
 
             while not done:
+                key, *subkeys = jax.random.split(master_key, config["NUM_AGENTS"] + 1)
+                master_key = key
                 actions, values, log_probs = {}, {}, {}
 
                 for i, agent in enumerate(env.agents):
                     obs_agent = jnp.array(obs_env[agent])[None, ...]
-                    subkey = keys_agents[i]
+                    subkey = subkeys[i]
                     action, log_prob, value = select_action(models[agent], obs_agent, subkey)
                     actions[agent] = int(action)
                     trajectory[agent]["obs"].append(obs_agent)

@@ -16,7 +16,7 @@ class CustomMLP(eqx.Module):
 
     def __call__(self, x):
         for layer in self.layers[:-1]:
-            x = jax.nn.relu(layer(x))
+            x = jax.nn.tanh(layer(x))
         x = self.layers[-1](x)
         return x
 
@@ -25,7 +25,7 @@ class ActorCritic(eqx.Module):
     actor: CustomMLP
     critic: CustomMLP
 
-    def __init__(self, obs_shape, n_actions, key, hidden_sizes=(256, 256, 128)):
+    def __init__(self, obs_shape, n_actions, key, hidden_sizes=(64, 64, 16)):
         key1, key2 = jr.split(key)
         flat_obs_dim = int(jnp.prod(jnp.array(obs_shape)))
 
