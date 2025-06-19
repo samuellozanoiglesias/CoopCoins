@@ -3,26 +3,25 @@ import ray
 from ray import tune
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.algorithms.ppo.ppo_torch_policy import PPOTorchPolicy
-from ray.rllib.env.wrappers.pettingzoo_env import PettingZooEnv
 from ray.tune.registry import register_env
 from datetime import datetime
-from jaxmarl import make
-import csv
 import numpy as np
 from gymnasium.spaces import Box, Discrete
-
+from jaxmarl.environments.coin_game.coin_game_rllib_env import CoinGameRLLibEnv
 
 def env_creator(config):
-    env = make("coin_game_env_RLLIB", 
+    env_idx = config.get("worker_index", 0)
+    return CoinGameRLLibEnv(
         num_inner_steps=config["NUM_INNER_STEPS"],
         num_outer_steps=config["NUM_EPOCHS"],
         cnn=False,
         egocentric=False,
         payoff_matrix=config["PAYOFF_MATRIX"],
         grid_size=config["GRID_SIZE"],
-        reward_coef=config["REWARD_COEF"]
+        reward_coef=config["REWARD_COEF"],
+        path=config["PATH"],
+        env_idx=env_idx
     )
-    return PettingZooEnv(env)
 
 def make_train_RLLIB(config):
     current_date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -34,10 +33,6 @@ def make_train_RLLIB(config):
     with open(os.path.join(path, "config.txt"), "w") as f:
         for key, val in config.items():
             f.write(f"{key}: {val}\n")
-
-    # Initialize CSV logging
-    csv_path = os.path.join(path, "training_stats.csv")
-    write_header = True
 
     # Initialize Ray
     ray.init(ignore_reinit_error=True)
@@ -60,7 +55,7 @@ def make_train_RLLIB(config):
             lambda_=config["GAE_LAMBDA"],
             entropy_coeff=config["ENT_COEF"],
             clip_param=config["CLIP_EPS"],
-            vf_clip_param=config["VF_COEF"],
+            vf_loss_coeff=config["VF_COEF"],
             num_epochs=config["NUM_UPDATES"],
             model={
                 "fcnet_hiddens": [64, 64, 16],
@@ -75,15 +70,15 @@ def make_train_RLLIB(config):
             enable_env_runner_and_connector_v2=False
         )
         .debugging(log_level="INFO")
-        .resources(num_gpus=0)  # Set to number of GPUs available
+        .resources(num_gpus=1, num_gpus_per_worker=1)  # Allocate GPU for main trainer and workers
         .evaluation(
             evaluation_interval=config["SHOW_EVERY_N_EPOCHS"],
             evaluation_duration=10,
         )
         .multi_agent(
             policies={
-                "agent_0": (None, temp_env.observation_spaces["agent_0"], temp_env.action_spaces["agent_0"], {}),
-                "agent_1": (None, temp_env.observation_spaces["agent_1"], temp_env.action_spaces["agent_1"], {})
+                "agent_0": (None, temp_env.observation_space("agent_0"), temp_env.action_space("agent_0"), {}),
+                "agent_1": (None, temp_env.observation_space("agent_1"), temp_env.action_space("agent_1"), {})
             },
             policy_mapping_fn=lambda agent_id, episode, worker, **kwargs: agent_id,
             policies_to_train=["agent_0", "agent_1"]
@@ -95,7 +90,7 @@ def make_train_RLLIB(config):
 
     # Get the environment to access agent information
     env = env_creator(config)
-    agents = env.env.agents
+    agents = env.agents
 
     # Training loop
     for epoch in range(config["NUM_EPOCHS"]):
@@ -104,42 +99,6 @@ def make_train_RLLIB(config):
         # Log metrics
         if epoch % config["SHOW_EVERY_N_EPOCHS"] == 0:
             print(f"Epoch {epoch} complete.")
-            print(f"Episode reward mean: {result['episode_reward_mean']}")
-            print(f"Episode length mean: {result['episode_len_mean']}")
-
-        # Extract and log detailed metrics
-        row = {
-            "epoch": epoch,
-        }
-
-        # Get the latest episode info
-        episode_infos = result.get("hist_stats", {}).get("episode", {})
-        if episode_infos:
-            for agent in agents:
-                # Get agent-specific metrics from the environment
-                agent_info = episode_infos.get(f"{agent}_info", {})
-                if agent_info:
-                    row.update({
-                        f"reward_{agent}": float(agent_info.get("cumulated_modified_reward", 0)),
-                        f"pure_reward_{agent}": float(agent_info.get("cumulated_pure_reward", 0)),
-                    })
-                    
-                    a_stats = agent_info.get("cumulated_action_stats", [0, 0, 0, 0, 0])
-                    row.update({
-                        f"own_coin_collected_{agent}": int(a_stats[0]),
-                        f"other_coin_collected_{agent}": int(a_stats[1]),
-                        f"reject_own_coin_{agent}": int(a_stats[2]),
-                        f"reject_other_coin_{agent}": int(a_stats[3]),
-                        f"no_coin_visible_{agent}": int(a_stats[4]),
-                    })
-
-            # Write to CSV
-            with open(csv_path, "a", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=row.keys())
-                if write_header:
-                    writer.writeheader()
-                    write_header = False
-                writer.writerow(row)
 
         # Save checkpoint
         if epoch % config["SAVE_EVERY_N_EPOCHS"] == 0:

@@ -19,14 +19,14 @@ with open(input_path, "r") as f:
 
 REWARD_COEF = [[alpha_1, beta_1], [alpha_2, beta_2]]
 
-#local = '/mnt/lustre/home/samuloza'
-local = 'D:/OneDrive - Universidad Complutense de Madrid (UCM)/Doctorado'
+local = '/mnt/lustre/home/samuloza'
+#local = 'D:/OneDrive - Universidad Complutense de Madrid (UCM)/Doctorado'
 
 # Hiperparámetros
-NUM_ENVS = 4
-NUM_INNER_STEPS = 100
-NUM_UPDATES_PER_EPOCH = 8
-NUM_EPOCHS = 10000
+NUM_ENVS = 2
+NUM_INNER_STEPS = 50
+NUM_UPDATES_PER_EPOCH = 10
+NUM_EPOCHS = 5000
 NUM_AGENTS = 2
 SHOW_EVERY_N_EPOCHS = 100
 SAVE_EVERY_N_EPOCHS = 500
@@ -54,8 +54,8 @@ config = {
     "SAVE_DIR": save_dir,
     "GAMMA": 0.9,  # Slightly reduced for more immediate rewards
     "GAE_LAMBDA": 0.95,  # GAE-Lambda parameter
-    "ENT_COEF": 0.07,  # Increased entropy coefficient for better exploration
-    "CLIP_EPS": 0.1,  # PPO clip parameter
+    "ENT_COEF": 0.01,  # Entropy coefficient
+    "CLIP_EPS": 0.2,  # PPO clip parameter
     "VF_COEF": 0.5,  # Value function coefficient
     "MAX_GRAD_NORM": 0.3,  # Gradient clipping
     "MINIBATCH_SIZE": NUM_INNER_STEPS // NUM_UPDATES_PER_EPOCH,

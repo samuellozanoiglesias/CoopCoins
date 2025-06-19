@@ -1,9 +1,5 @@
-import jax
 import os
-import pickle
 import sys
-import jax.numpy as jnp
-import numpy as np
 from jaxmarl.environments.coin_game.make_train_RLLIB import make_train_RLLIB
 
 # Leer archivo de entrada
@@ -19,22 +15,23 @@ with open(input_path, "r") as f:
 
 REWARD_COEF = [[alpha_1, beta_1], [alpha_2, beta_2]]
 
-brigit = '/mnt/lustre/home/samuloza'
+local = '/mnt/lustre/home/samuloza'
+#local = 'D:/OneDrive - Universidad Complutense de Madrid (UCM)/Doctorado'
 
 # Hiperparámetros
 NUM_ENVS = 1
-NUM_INNER_STEPS = 50
-NUM_EPOCHS = 3000
+NUM_INNER_STEPS = 250
+NUM_EPOCHS = 20000
 NUM_AGENTS = 2
-SHOW_EVERY_N_EPOCHS = 100
-SAVE_EVERY_N_EPOCHS = 500
+SHOW_EVERY_N_EPOCHS = 1000
+SAVE_EVERY_N_EPOCHS = 1000
 
 if DILEMMA:
     PAYOFF_MATRIX = [[1, 2, -3], [1, 2, -3]]
-    save_dir = f'{brigit}/data/samuel_lozano/coin_game/Prisioner_dilemma'
+    save_dir = f'{local}/data/samuel_lozano/coin_game/RLLIB/Prisioner_dilemma'
 else:
     PAYOFF_MATRIX = [[1, 1, -2], [1, 1, -2]]
-    save_dir = f'{brigit}/data/samuel_lozano/coin_game/No_dilemma'
+    save_dir = f'{local}/data/samuel_lozano/coin_game/RLLIB/No_dilemma'
 
 os.makedirs(save_dir, exist_ok=True)
 
@@ -52,16 +49,14 @@ config = {
     "REWARD_COEF": REWARD_COEF,
     "SAVE_DIR": save_dir,
     # RLlib specific parameters
-    "NUM_STEPS": NUM_INNER_STEPS,  # Steps per rollout
-    "MINIBATCH_SIZE": 64,  # Size of minibatches for training
-    "UPDATE_EPOCHS": 10,  # Number of epochs to update the policy
-    "GAMMA": 0.995,  # Discount factor
+    "NUM_UPDATES": 4,  # Number of updates of the policy
+    "GAMMA": 0.9,  # Discount factor
     "GAE_LAMBDA": 0.95,  # GAE-Lambda parameter
-    "ENT_COEF": 0.01,  # Entropy coefficient
+    "ENT_COEF": 0.05,  # Entropy coefficient
     "CLIP_EPS": 0.2,  # PPO clip parameter
-    "VF_COEF": 0.5,  # Value function coefficient
-    "DEVICE": jax.devices()
+    "VF_COEF": 0.5  # Value function coefficient
 }
+
 
 # Run training
 trainer, current_date = make_train_RLLIB(config)

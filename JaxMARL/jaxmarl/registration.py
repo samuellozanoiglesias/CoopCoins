@@ -27,7 +27,7 @@ from .environments import (
     Hanabi,
     Overcooked,
     CoinGame,
-    CoinGameEnvRLLIB,
+    CoinGameRLLibEnv,
     CoinGame_EASY,
     JaxNav,
 )
@@ -113,8 +113,8 @@ def make(env_id: str, **env_kwargs):
         env = CoinGame(**env_kwargs)
     
     # 8. Coin Game RLLIB
-    elif env_id == "coin_game_env_RLLIB":
-        env = CoinGameEnvRLLIB(**env_kwargs)
+    elif env_id == "coin_game_rllib_env":
+        env = CoinGameRLLibEnv(**env_kwargs)
     
     # 8. Coin Game EASY
     elif env_id == "coin_game_EASY":
