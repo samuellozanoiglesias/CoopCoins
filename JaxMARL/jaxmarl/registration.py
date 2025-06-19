@@ -28,6 +28,7 @@ from .environments import (
     Overcooked,
     CoinGame,
     CoinGameEnvRLLIB,
+    CoinGame_EASY,
     JaxNav,
 )
 
@@ -114,7 +115,11 @@ def make(env_id: str, **env_kwargs):
     # 8. Coin Game RLLIB
     elif env_id == "coin_game_env_RLLIB":
         env = CoinGameEnvRLLIB(**env_kwargs)
-        
+    
+    # 8. Coin Game EASY
+    elif env_id == "coin_game_EASY":
+        env = CoinGame_EASY(**env_kwargs)
+
     # 9. JaxNav
     elif env_id == "jaxnav":
         env = JaxNav(**env_kwargs)
@@ -151,5 +156,6 @@ registered_envs = [
     "overcooked",
     "coin_game",
     "coin_game_env_RLLIB",
+    "coin_game_EASY",
     "jaxnav",
 ]

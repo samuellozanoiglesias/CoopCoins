@@ -15,7 +15,7 @@ def actor_critic_fn(obs_shape, n_actions, key):
     model = ActorCritic(obs_shape, n_actions, key)
     return model
 
-def make_train(config):
+def make_train_EASY(config):
     current_date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path = os.path.join(config["SAVE_DIR"], f"Training_{current_date}")
     os.makedirs(path, exist_ok=True)
@@ -167,7 +167,7 @@ def make_train(config):
             done = False
             key = keys_envs[env_idx]
 
-            trajectory = {agent: {"obs": [], "actions": [], "log_probs": [], "rewards": [], "values": []}
+            trajectory = {agent: {"obs": [], "actions": [], "log_probs": [], "rewards": [], "values": [], "action_counts": jnp.zeros(5, dtype=jnp.int32)}
                           for agent in env.agents}
 
             while not done:
@@ -184,6 +184,9 @@ def make_train(config):
                     trajectory[agent]["actions"].append(action)
                     trajectory[agent]["log_probs"].append(log_prob)
                     trajectory[agent]["values"].append(value)
+                    # Count actions
+                    one_hot_action = jax.nn.one_hot(action, 5, dtype=jnp.int32)
+                    trajectory[agent]["action_counts"] = trajectory[agent]["action_counts"] + one_hot_action
 
                 obs_next, state_next, reward, dones, infos = env.step(key, state, actions)
 
@@ -244,6 +247,13 @@ def make_train(config):
                     f"reject_other_coin_{agent}": int(a_stats[3]),
                     f"no_coin_visible_{agent}": int(a_stats[4]),
                 })
+                # Save action counts for this episode
+                action_counts = trajectory[agent]["action_counts"]
+                row[f"right_{agent}"] = int(action_counts[0])
+                row[f"left_{agent}"] = int(action_counts[1])
+                row[f"up_{agent}"] = int(action_counts[2])
+                row[f"down_{agent}"] = int(action_counts[3])
+                row[f"stay_{agent}"] = int(action_counts[4])
 
             with open(csv_path, "a", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=row.keys())

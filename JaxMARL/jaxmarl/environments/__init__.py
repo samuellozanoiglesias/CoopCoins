@@ -22,5 +22,6 @@ from .hanabi import Hanabi
 from .storm import InTheGrid, InTheGrid_2p, InTheMatrix
 from .coin_game import CoinGame
 from .coin_game import CoinGameEnvRLLIB
+from .coin_game import CoinGame_EASY
 from .jaxnav import JaxNav
 

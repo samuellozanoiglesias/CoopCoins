@@ -31,7 +31,7 @@ class ActorCritic(eqx.Module):
     actor: CustomMLP
     critic: CustomMLP
 
-    def __init__(self, obs_shape, n_actions, key, hidden_sizes=(128, 128, 64)):
+    def __init__(self, obs_shape, n_actions, key, hidden_sizes=(32, 64, 16)):
         key1, key2 = jr.split(key)
         flat_obs_dim = int(jnp.prod(jnp.array(obs_shape)))
 
