@@ -35,7 +35,7 @@ def make_train_RLLIB(config):
             f.write(f"{key}: {val}\n")
 
     # Initialize Ray
-    ray.init(ignore_reinit_error=True)
+    ray.init(ignore_reinit_error=True, include_dashboard=False)
 
     # Register the environment
     register_env("coin_game_env_RLLIB", env_creator)
