@@ -42,7 +42,7 @@ The environment consists of two agents (red and blue) moving on a grid (default 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/coopcoins.git
+git clone https://github.com/samuellozanoiglesias/CoopCoins.git
 cd coopcoins
 
 # Install dependencies
@@ -169,10 +169,6 @@ CoopCoins is particularly useful for studying:
 - **Emergent Cooperation**: Spontaneous development of cooperative strategies
 - **Multi-Agent Learning**: Coordination and competition dynamics
 
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
-
 ## Citation
 
 If you use CoopCoins in your research, please cite:
@@ -180,9 +176,9 @@ If you use CoopCoins in your research, please cite:
 ```bibtex
 @misc{coopcoins2024,
   title={CoopCoins: A Multi-Agent Environment for Studying Cooperative Behavior},
-  author={Your Name},
+  author={Samuel Lozano Iglesias},
   year={2024},
-  url={https://github.com/yourusername/coopcoins}
+  url={https://github.com/samuellozanoiglesias/CoopCoins}
 }
 ```
 
