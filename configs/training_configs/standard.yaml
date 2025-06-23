@@ -1,0 +1,29 @@
+# Standard training configuration for experiments
+training:
+  num_envs: 4
+  num_inner_steps: 300
+  num_epochs: 100000
+  num_updates_per_epoch: 150
+  show_every_n_epochs: 10000
+  save_every_n_epochs: 10000
+
+hyperparameters:
+  learning_rate: 0.001
+  gamma: 0.9
+  gae_lambda: 0.95
+  entropy_coef: 0.15
+  clip_eps: 0.1
+  vf_coef: 0.7
+  max_grad_norm: 0.5
+  minibatch_size: 2
+  num_updates_per_minibatch: 4
+
+environment:
+  grid_size: 3
+  payoff_matrix: [[1, 1, -2], [1, 1, -2]]
+  reward_coef: [[1.0, 0.0], [1.0, 0.0]]  # Selfish agents
+  dilemma: false
+
+paths:
+  save_dir: "./results/standard_training"
+  log_dir: "./logs" 

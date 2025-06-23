@@ -1,0 +1,35 @@
+# Core dependencies
+jax>=0.4.13
+jaxlib>=0.4.13
+numpy>=1.21.0
+optax>=0.1.7
+chex>=0.1.7
+gymnax>=0.0.3
+
+# MARL and RL frameworks
+ray[rllib]>=2.7.0
+pettingzoo>=1.24.0
+
+# Data analysis and visualization
+pandas>=1.5.0
+matplotlib>=3.6.0
+seaborn>=0.12.0
+plotly>=5.15.0
+
+# Jupyter notebooks
+jupyter>=1.0.0
+ipykernel>=6.25.0
+
+# Utilities
+tqdm>=4.64.0
+pyyaml>=6.0
+pickle5>=0.0.12
+
+# Optional: For advanced visualization
+imageio>=2.25.0
+imageio-ffmpeg>=0.4.8
+
+# Development dependencies
+pytest>=7.3.0
+black>=23.0.0
+flake8>=6.0.0 
