@@ -52,7 +52,8 @@ class CoinGameRLLibEnv(MultiAgentEnv):
         grid_size: int = 3,
         reward_coef=[[1,0],[1,0]],
         path: str = "episode_log.csv",
-        env_idx: int = 0
+        env_idx: int = 0,
+        **kwargs
     ):
         super().__init__()
         self.env_idx = env_idx
