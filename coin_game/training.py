@@ -33,10 +33,10 @@ SAVE_EVERY_N_EPOCHS = 500
 
 if DILEMMA:
     PAYOFF_MATRIX = [[1, 2, -3], [1, 2, -3]]
-    save_dir = f'{local}/data/samuel_lozano/coin_game/Prisioner_dilemma'
+    save_dir = f'{local}/data/samuel_lozano/CoopCoins/Prisioner_dilemma'
 else:
     PAYOFF_MATRIX = [[1, 1, -2], [1, 1, -2]]
-    save_dir = f'{local}/data/samuel_lozano/coin_game/No_dilemma'
+    save_dir = f'{local}/data/samuel_lozano/CoopCoins/No_dilemma'
 
 os.makedirs(save_dir, exist_ok=True)
 

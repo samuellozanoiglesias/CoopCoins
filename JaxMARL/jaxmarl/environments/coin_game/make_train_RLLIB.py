@@ -11,6 +11,7 @@ from jaxmarl.environments.coin_game.coin_game_rllib_env import CoinGameRLLibEnv
 
 def env_creator(config):
     env_idx = config.get("worker_index", 0)
+    seed = config.get("SEED", 0)
     return CoinGameRLLibEnv(
         num_inner_steps=config["NUM_INNER_STEPS"],
         num_outer_steps=config["NUM_EPOCHS"],
@@ -20,7 +21,8 @@ def env_creator(config):
         grid_size=config["GRID_SIZE"],
         reward_coef=config["REWARD_COEF"],
         path=config["PATH"],
-        env_idx=env_idx
+        env_idx=env_idx,
+        seed=seed
     )
 
 def make_train_RLLIB(config):
@@ -109,4 +111,4 @@ def make_train_RLLIB(config):
     trainer.stop()
     ray.shutdown()
 
-    return trainer.get_policy(), current_date
+    return trainer, current_date

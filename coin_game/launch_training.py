@@ -2,7 +2,7 @@ import os
 import numpy as np
 import subprocess
 
-os.chdir(r"D:\OneDrive - Universidad Complutense de Madrid (UCM)\Doctorado\hfsp_overcooked_mod\coin_game")
+os.chdir(r"D:\OneDrive - Universidad Complutense de Madrid (UCM)\Doctorado\CoopCoins\coin_game")
 
 angles_1 = np.arange(270, 360, 45)
 dilemma = 1  # Set to 1 for dilemma, 0 for no dilemma

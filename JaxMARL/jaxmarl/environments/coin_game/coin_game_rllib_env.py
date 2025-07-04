@@ -53,6 +53,7 @@ class CoinGameRLLibEnv(MultiAgentEnv):
         reward_coef=[[1,0],[1,0]],
         path: str = "episode_log.csv",
         env_idx: int = 0,
+        seed: int = 0,
         **kwargs
     ):
         super().__init__()
@@ -83,7 +84,8 @@ class CoinGameRLLibEnv(MultiAgentEnv):
             for agent in self.agents
         }
 
-        self.key = jax.random.PRNGKey(0)
+        self.seed = seed
+        self.key = jax.random.PRNGKey(self.seed)
         self.state = None
         self.dones = {agent: False for agent in self.agents}
         self.rewards = {agent: 0.0 for agent in self.agents}
@@ -104,8 +106,7 @@ class CoinGameRLLibEnv(MultiAgentEnv):
 
     def reset(self, seed=None, options=None):
         self.agents = self.possible_agents.copy()
-        if seed is not None:
-            self.key = jax.random.PRNGKey(seed)
+        self.key = jax.random.PRNGKey(self.seed)
         self.key, subkey = jax.random.split(self.key)
         obs, self.state = self._reset(subkey)
         self.dones = {agent: False for agent in self.agents}
@@ -244,10 +245,15 @@ class CoinGameRLLibEnv(MultiAgentEnv):
         blue_reward = jnp.where(blue_blue_matches, blue_reward + _bb_reward, blue_reward)
         blue_reward = jnp.where(red_blue_matches, blue_reward + _b_penalty, blue_reward)
 
+        def toroidal_adjacent(pos1, pos2, grid_size):
+            dx = min(abs(pos1[0] - pos2[0]), grid_size - abs(pos1[0] - pos2[0]))
+            dy = min(abs(pos1[1] - pos2[1]), grid_size - abs(pos1[1] - pos2[1]))
+            return (dx == 1 and dy == 0) or (dx == 0 and dy == 1)
+
         # --- Stats and done logic from original code ---
-        def _classify_action(pos, coin_pos, got_coin):
-            own_adjacent = abs(pos[0] - coin_pos[0][0]) + abs(pos[1] - coin_pos[0][1]) == 1
-            other_adjacent = abs(pos[0] - coin_pos[1][0]) + abs(pos[1] - coin_pos[1][1]) == 1
+        def _classify_action(pos, coin_pos, got_coin, grid_size=3):
+            own_adjacent = toroidal_adjacent(pos, coin_pos[0], grid_size)
+            other_adjacent = toroidal_adjacent(pos, coin_pos[1], grid_size)
             if got_coin == 0:
                 return jnp.array([1, 0, 0, 0, 0])
             elif got_coin == 1:
@@ -262,12 +268,14 @@ class CoinGameRLLibEnv(MultiAgentEnv):
         red_stats = _classify_action(
             new_red_pos,
             (state.red_coin_pos, state.blue_coin_pos),
-            jnp.where(red_red_matches, 0, jnp.where(red_blue_matches, 1, -1))
+            jnp.where(red_red_matches, 0, jnp.where(red_blue_matches, 1, -1)),
+            grid_size = self.grid_size
         )
         blue_stats = _classify_action(
             new_blue_pos,
             (state.blue_coin_pos, state.red_coin_pos),
-            jnp.where(blue_blue_matches, 0, jnp.where(blue_red_matches, 1, -1))
+            jnp.where(blue_blue_matches, 0, jnp.where(blue_red_matches, 1, -1)),
+            grid_size = self.grid_size
         )
         new_action_stats = state.action_stats + jnp.stack([red_stats, blue_stats])
 

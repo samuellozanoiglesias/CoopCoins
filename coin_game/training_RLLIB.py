@@ -7,6 +7,7 @@ input_path = sys.argv[1]
 DILEMMA = int(sys.argv[2])
 LR = float(sys.argv[3])
 GRID_SIZE = int(sys.argv[4])
+SEED = int(sys.argv[5])
 
 with open(input_path, "r") as f:
     lines = f.readlines()
@@ -20,18 +21,18 @@ local = '/mnt/lustre/home/samuloza'
 
 # Hiperparámetros
 NUM_ENVS = 1
-NUM_INNER_STEPS = 250
-NUM_EPOCHS = 20000
+NUM_INNER_STEPS = 150
+NUM_EPOCHS = 5000
 NUM_AGENTS = 2
 SHOW_EVERY_N_EPOCHS = 1000
-SAVE_EVERY_N_EPOCHS = 1000
+SAVE_EVERY_N_EPOCHS = 500
 
 if DILEMMA:
     PAYOFF_MATRIX = [[1, 2, -3], [1, 2, -3]]
-    save_dir = f'{local}/data/samuel_lozano/coin_game/RLLIB/Prisioner_dilemma'
+    save_dir = f'{local}/data/samuel_lozano/CoopCoins/RLLIB/Prisioner_dilemma'
 else:
     PAYOFF_MATRIX = [[1, 1, -2], [1, 1, -2]]
-    save_dir = f'{local}/data/samuel_lozano/coin_game/RLLIB/No_dilemma'
+    save_dir = f'{local}/data/samuel_lozano/CoopCoins/RLLIB/No_dilemma'
 
 os.makedirs(save_dir, exist_ok=True)
 
@@ -54,7 +55,8 @@ config = {
     "GAE_LAMBDA": 0.95,  # GAE-Lambda parameter
     "ENT_COEF": 0.05,  # Entropy coefficient
     "CLIP_EPS": 0.2,  # PPO clip parameter
-    "VF_COEF": 0.5  # Value function coefficient
+    "VF_COEF": 0.5,  # Value function coefficient
+    "SEED": SEED,
 }
 
 
@@ -66,5 +68,5 @@ path = os.path.join(config["SAVE_DIR"], f"Training_{current_date}")
 os.makedirs(path, exist_ok=True)
 
 # Save the final policy
-final_checkpoint = trainer.save(os.path.join(path, "final_checkpoint"))
+final_checkpoint = trainer.save(os.path.join(path, f"checkpoint_{NUM_EPOCHS}"))
 print(f"Final checkpoint saved at {final_checkpoint}")
