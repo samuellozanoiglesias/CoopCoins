@@ -106,7 +106,6 @@ class CoinGameRLLibEnv(MultiAgentEnv):
 
     def reset(self, seed=None, options=None):
         self.agents = self.possible_agents.copy()
-        self.key = jax.random.PRNGKey(self.seed)
         self.key, subkey = jax.random.split(self.key)
         obs, self.state = self._reset(subkey)
         self.dones = {agent: False for agent in self.agents}
