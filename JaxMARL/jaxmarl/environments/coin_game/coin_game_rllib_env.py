@@ -235,8 +235,8 @@ class CoinGameRLLibEnv(MultiAgentEnv):
         _rr_reward = self.payoff_matrix[0][0]
         _rb_reward = self.payoff_matrix[0][1]
         _r_penalty = self.payoff_matrix[0][2]
-        _br_reward = self.payoff_matrix[1][0]
-        _bb_reward = self.payoff_matrix[1][1]
+        _bb_reward = self.payoff_matrix[1][0]
+        _br_reward = self.payoff_matrix[1][1]
         _b_penalty = self.payoff_matrix[1][2]
         red_reward = jnp.where(red_red_matches, red_reward + _rr_reward, red_reward)
         red_reward = jnp.where(red_blue_matches, red_reward + _rb_reward, red_reward)
