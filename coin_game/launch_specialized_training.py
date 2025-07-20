@@ -6,23 +6,46 @@ import subprocess
 os.chdir(r"/home/samuel_lozano/CoopCoins/coin_game")
 
 # Parámetros fijos
-dilemma = 1
+dilemma = 0
 grid_size = 3
 lr = 3e-4
 train_script = "./training_RLLIB.py"
 
 seeds = range(1, 11)
-configs = ["mart_1", "mart_2"]
+configs = ["dest_2"]
 
 os.makedirs("inputs", exist_ok=True)
 os.makedirs("logs", exist_ok=True)
 
 for seed in seeds:
     for config in configs:
-        if config == "mart_1":
-            angle_1, angle_2 = 180, 0
-        else:
+        if config == "ind_1":
+            angle_1, angle_2 = 0, 0
+        elif config == "coop_1":
+            angle_1, angle_2 = 0, 45
+        elif config == "coop_2":
+            angle_1, angle_2 = 45, 0
+        elif config == "alt_1":
+            angle_1, angle_2 = 0, 90
+        elif config == "alt_2":
+            angle_1, angle_2 = 90, 0
+        elif config == "sacr_1":
+            angle_1, angle_2 = 0, 135
+        elif config == "sacr_2":
+            angle_1, angle_2 = 135, 0
+        elif config == "mart_1":
             angle_1, angle_2 = 0, 180
+        elif config == "mart_2":
+            angle_1, angle_2 = 180, 0
+        elif config == "dest_1":
+            angle_1, angle_2 = 0, 225
+        elif config == "dest_2":
+            angle_1, angle_2 = 225, 0
+        elif config == "comp_1":
+            angle_1, angle_2 = 0, 315
+        elif config == "comp_2":
+            angle_1, angle_2 = 315, 0
+        
 
         rad_1 = np.radians(angle_1)
         rad_2 = np.radians(angle_2)

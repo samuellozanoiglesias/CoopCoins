@@ -16,7 +16,8 @@ with open(input_path, "r") as f:
 
 REWARD_COEF = [[alpha_1, beta_1], [alpha_2, beta_2]]
 
-local = '/mnt/lustre/home/samuloza'
+#local = '/mnt/lustre/home/samuloza'
+local = ''
 #local = 'D:/OneDrive - Universidad Complutense de Madrid (UCM)/Doctorado'
 
 # Hiperparámetros

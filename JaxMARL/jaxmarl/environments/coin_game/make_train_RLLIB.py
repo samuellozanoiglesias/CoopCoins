@@ -72,7 +72,7 @@ def make_train_RLLIB(config):
             enable_env_runner_and_connector_v2=False
         )
         .debugging(log_level="INFO")
-        .resources(num_gpus=1, num_gpus_per_worker=1)  # Allocate GPU for main trainer and workers
+        .resources(num_gpus=0.1, num_cpus_per_worker=1)  # Allocate GPU for main trainer and workers
         .evaluation(
             evaluation_interval=config["SHOW_EVERY_N_EPOCHS"],
             evaluation_duration=10,
