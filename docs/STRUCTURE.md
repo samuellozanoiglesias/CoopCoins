@@ -63,118 +63,62 @@ coopcoins/
   - Minimal setup for getting started
   - Basic configuration demonstration
 
-- **`attitude_experiments.py`** - Cooperative attitude experiments
-  - Systematic testing of different reward coefficients
-  - Comparison between selfish, cooperative, and altruistic agents
+# Repository structure (aligned with this repo)
 
-### Analysis Examples
+This file describes the actual top-level layout of the CoopCoins repository and what each major folder contains. The repository uses `coin_game/` as the main package (not `src/`).
 
-- **`training_analysis.ipynb`** - Comprehensive training analysis
-  - Performance comparison across configurations
-  - Behavioral pattern analysis
-  - Statistical summaries
+Top-level layout
 
-- **`visualization_demo.ipynb`** - Visualization examples
-  - Episode replay generation
-  - Agent behavior analysis
-  - Training progress visualization
+```
+CoopCoins/
+├── README.md
+├── LICENSE
+├── requirements.txt
+├── configs/                # Attitude & training configuration files
+│   └── attitudes/
+├── coin_game/              # Main environment and training code (package)
+├── JaxMARL/                # Local copy of JaxMARL used by the project
+├── scripts/                # Utility scripts (generate, batch, visualize)
+├── docs/                   # Documentation markdown files
+├── examples/               # Example scripts / notebooks
+└── tests/                  # Unit / integration tests
+```
 
-## Configuration (`configs/`)
+Key folders
 
-### Reward Configurations
+- `coin_game/`: main package containing the environment implementations, training entrypoints (e.g., `trainer.py`, `launch_training.py`), and utilities. Use this package to run or import training and visualization functions.
+- `configs/`: contains `attitudes/` (text files with reward coefficients) and `training_configs/` (yaml files for experiment presets).
+- `scripts/`: helper scripts such as `generate_attitudes.py`, `training.py` (batch launcher), and `example_visualization.py`.
+- `JaxMARL/`: local dependency shipped in-tree; install with `pip install -e ./JaxMARL` for development.
+- `docs/`: user-facing documentation (this file, API references, training guides).
 
-- **`attitudes/`** - Pre-configured cooperative attitudes
-  - `selfish.txt` - [1.0, 0.0] for both agents
-  - `cooperative.txt` - [0.7, 0.3] for both agents
-  - `altruistic.txt` - [0.5, 0.5] for both agents
-  - `mixed.txt` - Different attitudes for each agent
+Scripts and utilities
 
-### Training Configurations
+- `scripts/generate_attitudes.py`: create attitude `.txt` files (angles or predefined names).
+- `scripts/training.py`: batch launcher that iterates attitude files and calls `coin_game/trainer.py` for each.
+- `scripts/example_visualization.py`: simple script to load an RLlib checkpoint and produce GIF visualizations.
 
-- **`training_configs/`** - Training parameter sets
-  - `quick.yaml` - Fast training for development
-  - `standard.yaml` - Standard training parameters
-  - `comprehensive.yaml` - Full-scale experiments
+Configuration files
 
-## Scripts (`scripts/`)
+- Attitude files (in `configs/attitudes/`) are text files with two lines: `alpha beta` for each agent.
+- Training presets are YAML files in `configs/training_configs/` (e.g., `quick.yaml`, `standard.yaml`).
 
-### Utility Scripts
+Usage examples
 
-- **`generate_attitudes.py`** - Generate attitude configuration files
-  - Creates input files for different cooperative attitudes
-  - Supports systematic parameter sweeps
+1. Generate attitudes:
 
-- **`batch_training.py`** - Batch training launcher
-  - Runs multiple experiments with different configurations
-  - Automated experiment management
+```bash
+python scripts/generate_attitudes.py --angles 0,45,90
+```
 
-- **`analyze_results.py`** - Results analysis script
-  - Aggregates training results
-  - Generates comparison plots
-  - Creates summary reports
+2. Dry-run the batch launcher:
 
-## Documentation (`docs/`)
+```bash
+python scripts/training.py --configs configs/attitudes --dry-run
+```
 
-- **`STRUCTURE.md`** - This file, explaining repository organization
-- **`API.md`** - API documentation for the environment
-- **`TRAINING.md`** - Detailed training guide
-- **`ANALYSIS.md`** - Analysis and visualization guide
-- **`EXAMPLES.md`** - Example usage and tutorials
+3. Visualize a checkpoint:
 
-## File Naming Conventions
-
-### Training Files
-- `training_*.py` - Training scripts
-- `train_*.py` - Training utilities
-- `*_trainer.py` - Trainer classes
-
-### Environment Files
-- `*_env.py` - Environment implementations
-- `*_wrapper.py` - Environment wrappers
-- `*_interface.py` - Environment interfaces
-
-### Configuration Files
-- `*.yaml` - YAML configuration files
-- `*.json` - JSON configuration files
-- `*.txt` - Simple text configurations
-
-### Analysis Files
-- `*_analysis.py` - Analysis scripts
-- `*_metrics.py` - Metrics calculation
-- `*_viz.py` - Visualization utilities
-
-## Key Configuration Parameters
-
-### Environment Parameters
-- `GRID_SIZE`: Size of the grid (default: 3)
-- `NUM_INNER_STEPS`: Steps per episode (default: 10)
-- `REWARD_COEF`: Cooperative attitude coefficients
-- `PAYOFF_MATRIX`: Reward structure matrix
-
-### Training Parameters
-- `NUM_ENVS`: Number of parallel environments
-- `NUM_EPOCHS`: Total training epochs
-- `LR`: Learning rate
-- `BATCH_SIZE`: Training batch size
-
-### Analysis Parameters
-- `METRICS_WINDOW`: Window for calculating metrics
-- `SAVE_INTERVAL`: How often to save checkpoints
-- `LOG_LEVEL`: Logging verbosity
-
-## Usage Patterns
-
-### Quick Start
-1. Use `examples/basic_training.py` for simple experiments
-2. Modify `configs/training_configs/quick.yaml` for parameters
-3. Run analysis with `examples/training_analysis.ipynb`
-
-### Systematic Experiments
-1. Generate configurations with `scripts/generate_attitudes.py`
-2. Run batch training with `scripts/batch_training.py`
-3. Analyze results with `scripts/analyze_results.py`
-
-### Custom Research
-1. Extend environment in `src/environments/`
-2. Add new metrics in `src/analysis/metrics.py`
-3. Create custom visualizations in `src/analysis/visualization.py` 
+```bash
+python scripts/example_visualization.py /path/to/checkpoint --episodes 3
+```

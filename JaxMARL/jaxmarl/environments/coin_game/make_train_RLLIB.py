@@ -59,6 +59,7 @@ def make_train_RLLIB(config):
             clip_param=config["CLIP_EPS"],
             vf_loss_coeff=config["VF_COEF"],
             num_epochs=config["NUM_UPDATES"],
+            minibatch_size=config["MINIBATCH_SIZE"],
             model={
                 "fcnet_hiddens": [64, 64, 16],
                 "fcnet_activation": "tanh",

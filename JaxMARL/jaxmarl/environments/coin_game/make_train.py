@@ -110,7 +110,7 @@ def make_train(config):
         return returns, gaes
     
     # === TRAINING UPDATE ===
-    def train_minibatches(model, opt_state, obs_batch, action_batch, advantage, return_batch, old_value_batch, key, optimizer, minibatch_size, epochs, clip_eps, old_log_probs):
+    def train_minibatches(model, opt_state, obs_batch, action_batch, advantage, return_batch, old_value_batch, key, optimizer, minibatch_size, num_updates, clip_eps, old_log_probs):
         num_minibatches = obs_batch.shape[0] // minibatch_size
 
         def compute_loss_batch(model, obs, actions, adv, returns, old_values):
@@ -144,12 +144,12 @@ def make_train(config):
             (model, opt_state), (losses, grad_norms) = lax.scan(minibatch_step, (model, opt_state), jnp.arange(num_minibatches))
             return (model, opt_state, key), (losses, grad_norms)
 
-        (model, opt_state, _), (losses, grad_norms) = lax.scan(epoch_step, (model, opt_state, key), None, length=epochs)
+        (model, opt_state, _), (losses, grad_norms) = lax.scan(epoch_step, (model, opt_state, key), None, length=num_updates)
         return model, opt_state, (losses, grad_norms)
 
-    # Create a JIT-compiled version with static optimizer, epochs, and minibatch_size
-    train_minibatches_jit = jit(train_minibatches, static_argnums=(8, 9, 10), static_argnames=('optimizer', 'minibatch_size', 'epochs'))
-    
+    # Create a JIT-compiled version with static optimizer, num_updates, and minibatch_size
+    train_minibatches_jit = jit(train_minibatches, static_argnums=(8, 9, 10), static_argnames=('optimizer', 'minibatch_size', 'num_updates'))
+
     # === LOGGING INIT ===
     states = [env.reset(k)[1] for env, k in zip(envs, keys_envs)]
     observations = [env.reset(k)[0] for env, k in zip(envs, keys_envs)]
@@ -214,7 +214,7 @@ def make_train(config):
                     key,
                     optimizer=optimizer[agent],
                     minibatch_size=config["MINIBATCH_SIZE"],
-                    epochs=config["NUM_UPDATES_PER_MINIBATCH"],
+                    num_updates=config["NUM_UPDATES"],
                     clip_eps=config["CLIP_EPS"],
                     old_log_probs=jnp.array(trajectory[agent]["log_probs"])
                 )

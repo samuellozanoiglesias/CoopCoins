@@ -40,51 +40,188 @@ The environment consists of two agents (red and blue) moving on a grid (default 
 
 ## Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/samuellozanoiglesias/CoopCoins.git
-cd coopcoins
+These instructions assume a Unix-like system (Linux, macOS). The project requires Python 3.10. Two common workflows are shown below: using conda to create an environment, or using a plain virtualenv with pip.
 
-# Install dependencies
+Option A — (recommended) Using conda
+
+```bash
+# Create and activate a conda environment with Python 3.10
+conda create -n coopcoins python=3.10 -y
+conda activate coopcoins
+
+# Install pip (if not already present) and other tooling
+conda install pip -y
+
+# From the repository root
+git clone https://github.com/samuellozanoiglesias/CoopCoins.git
+cd CoopCoins
+
+# Install runtime dependencies
 pip install -r requirements.txt
+
+# Install local editable package JaxMARL (required by CoopCoins)
+# This will install the package in editable/development mode so changes in JaxMARL/ are available
+pip install -e ./JaxMARL
 ```
+
+Option B — Using virtualenv and pip
+
+```bash
+# Create a virtualenv (Python 3.10 must be available as `python3.10`)
+python3.10 -m venv .venv
+source .venv/bin/activate
+
+# From the repository root
+git clone https://github.com/samuellozanoiglesias/CoopCoins.git
+cd CoopCoins
+
+# Upgrade pip and install requirements
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Install local editable package JaxMARL
+pip install -e ./JaxMARL
+```
+
+Notes
+- The `pip install -e ./JaxMARL` step installs the local JaxMARL package found in the `JaxMARL/` directory. This is required because CoopCoins depends on that package and the repository ships a copy for convenience and research reproducibility.
+- If you prefer not to install the editable package, you can install JaxMARL from PyPI if a published version exists, but features in the shipped `JaxMARL/` folder may be required for some experiments.
+- If you run into binary dependency issues (for example with JAX), consult the packages' documentation for platform-specific wheels and GPU support.
 
 ## Quick Start
 
-### Basic Training
+### Generating attitude configuration files (scripts/generate_attitudes.py)
 
-```python
-from coin_game.training import make_train
+The repository ships a helper script at `scripts/generate_attitudes.py` that creates attitude configuration files (plain text) used by the training scripts. The script supports two modes:
 
-# Configure training parameters
-config = {
-    "NUM_ENVS": 4,
-    "NUM_INNER_STEPS": 300,
-    "NUM_EPOCHS": 100000,
-    "LR": 0.001,
-    "GRID_SIZE": 3,
-    "REWARD_COEF": [[1.0, 0.0], [1.0, 0.0]],  # Selfish agents
-    "PAYOFF_MATRIX": [[1, 0, 0], [1, 0, 0]]
-}
+- Angles mode: generate pairwise combinations of single-agent attitudes computed from angles (default).
+- Predefined mode: generate pairwise combinations of named predefined attitudes only (no angles).
 
-# Start training
-params, current_date = make_train(config)
-```
+Files created by the script contain two lines, one per agent, with the agent's reward coefficients in the format:
 
-### Using Pre-configured Attitudes
+alpha beta
+
+So a file contains two lines (agent1 then agent2). Filenames are produced as `<attitudeA>_<attitudeB>.txt` (for example `angle_0_angle_45.txt` or `individualistic_cooperative.txt`).
+
+Usage notes
+
+- Default angles: `0,45,90,135,180,225,270,315`.
+- Default output directory: when running from the repository root use `--output-dir configs/attitudes` (the script's default is set so running from `scripts/` writes to `../configs/attitudes`).
+
+Examples
+
+Generate all angle combinations (default):
 
 ```bash
-# Train with different cooperative attitudes
-python coin_game/launch_training.py inputs/inputs_0_0.txt 0 0.001 3    # Selfish
-python coin_game/launch_training.py inputs/inputs_45_45.txt 0 0.001 3  # Cooperative
-python coin_game/launch_training.py inputs/inputs_90_0.txt 0 0.001 3   # Altruistic
+# from repo root
+python scripts/generate_attitudes.py --angles 0,45,315 --output-dir configs/attitudes
+
+# or run in background and log output
+# nohup python scripts/generate_attitudes.py --angles 0,45,315 --output-dir configs/attitudes > out_generate_attitudes.log 2>&1 &
 ```
 
-### Visualization
+Generate only specific predefined attitudes (no angles). Pass a comma-separated list of names or the special keyword `all` to include every predefined attitude:
 
-```python
-# Visualize trained models
-python coin_game/example_visualization.py /path/to/checkpoint --episodes 3
+```bash
+# generate pairwise combinations only for the three named attitudes
+python scripts/generate_attitudes.py --predefined individualistic,cooperative,competitive --output-dir configs/attitudes
+
+# all predefined
+python scripts/generate_attitudes.py --predefined all --output-dir configs/attitudes
+
+# background example
+# nohup python scripts/generate_attitudes.py --predefined individualistic,cooperative,competitive --output-dir configs/attitudes > out_generate_attitudes.log 2>&1 &
+```
+
+Available predefined names
+
+```
+individualistic
+cooperative
+altruistic
+sacrificial
+martyrial
+destructive
+spiteful
+competitive
+```
+
+How these files are used
+
+Pass a generated attitude file to the training entry point (example):
+
+```bash
+python scripts/training.py configs/attitudes/individualistic_cooperative.txt 0 0.001 3
+```
+
+If you need a different format or a custom sweep, you can edit `scripts/generate_attitudes.py` to change the naming or coefficient generation.
+
+## Generating trained agents with different attitudes (scripts/training.py)
+
+Launches a series of training experiments for every attitude file in a directory. It builds a command that calls `coin_game/trainer.py` for each attitude and writes logs to a per-experiment file. Useful flags include `--configs` to point to the attitudes directory, `--dilemma` to toggle the game variant, `--lr` and `--grid-size` to set hyperparameters, and `--dry-run` to preview commands.
+
+Usage example:
+
+```bash
+# Dry-run to see which experiments would be launched
+python scripts/training.py --configs configs/attitudes --dry-run
+
+# Launch a full batch using RLlib, grid size 3, learning rate 1e-4
+nohup python scripts/training.py --configs configs/attitudes --rllib Yes --dilemma 0 --lr 0.0001 --grid-size 3 --seed 42 > out_batch_training.log 2>&1 &
+```
+
+Notes
+- `scripts/training.py` expects `coin_game/trainer.py` to be callable from the repository root; adjust paths if you run it from a different working directory.
+- Logs are written to `logs/training` by default; use `--log-dir` to change it.
+
+Using `scripts/training.py` (detailed)
+------------------------------------
+
+What it does
+- Scans the `--configs` directory for `*.txt` attitude files.
+- For each file it launches a training process by calling `python ../coin_game/trainer.py <attitude_file> <rllib> <dilemma> <lr> <grid_size> <cluster> <seed>`.
+- Captures stdout/stderr for each run into a log file under `--log-dir`.
+
+Important flags
+- `--configs`: directory containing attitude `*.txt` files to iterate over (default `../configs/attitudes`).
+- `--rllib`: `Yes` or `No` (default `Yes`) — whether to run the RLlib training path.
+- `--dilemma`: `0` or `1` (default `0`) — set which game variant to run (0 = no dilemma, 1 = prisoner's dilemma).
+- `--lr`: learning rate float (default `0.001`).
+- `--grid-size`: grid size int (default `3`).
+- `--cluster`: optional cluster name from `['brigit', 'cuenca', 'local']` — script passes this to the trainer as a string argument.
+- `--seed`: optional integer seed used to label logs (default `0`).
+- `--log-dir`: where to write per-experiment logs (default `logs/training`).
+- `--dry-run`: do not execute training commands; just list what would run.
+
+Log naming
+- Each experiment log is named like: `<attitude_name>_r<rllib>_d<dilemma>_lr<lr>_gs<grid_size>_s<seed>.log`.
+  Example: `individualistic_cooperative_rYes_d0_lr0.001_gs3_s42.log`.
+
+Running tips
+- If you want to run experiments in background on a remote machine use `nohup` and redirect output. The script itself writes per-experiment logs, but `nohup` output will capture the launcher's stdout.
+- Use `--dry-run` first to ensure the correct attitude files are detected and commands look correct.
+- Ensure `coin_game/trainer.py` is callable from the path the launcher uses; the launcher shells out to `python ../coin_game/trainer.py` so run it from `scripts/` or adjust the path.
+
+Example workflows
+
+1) Dry-run to verify files and commands:
+
+```bash
+python scripts/training.py --configs configs/attitudes --dry-run
+```
+
+2) Launch experiments (background):
+
+```bash
+nohup python scripts/training.py --configs configs/attitudes --rllib Yes --dilemma 0 --lr 0.0001 --grid-size 3 --seed 42 --log-dir logs/batch_training > out_batch_training.log 2>&1 &
+```
+
+3) Run a targeted experiment manually (single attitude file):
+
+```bash
+python scripts/training.py --configs configs/attitudes --dry-run
+# then run a single train command manually if you prefer fine control:
+python coin_game/trainer.py configs/attitudes/individualistic_cooperative.txt Yes 0 0.0001 3 local 42
 ```
 
 ## Configuration
@@ -102,8 +239,8 @@ Where:
 - `beta_i`: Weight for the other agent's reward
 
 Common configurations:
-- `[[1, 0], [1, 0]]`: Selfish agents (default)
-- `[[0.7, 0.3], [0.7, 0.3]]`: Cooperative agents
+- `[[1, 0], [1, 0]]`: Individualistic agents (default)
+- `[[0.70, 0.7071], [0.7071, 0.7071]]`: Cooperative agents
 - `[[0.5, 0.5], [0.5, 0.5]]`: Altruistic agents
 
 ### Environment Parameters
@@ -146,18 +283,28 @@ visualize_episode(
 ## Project Structure
 
 ```
-coopcoins/
-├── coin_game/                 # Main environment and training code
-│   ├── coin_game.py          # Standard Coin Game implementation
-│   ├── coin_game_rllib_env.py # RLlib integration
-│   ├── training.py           # Training script
-│   ├── analysis.ipynb        # Analysis notebook
-│   ├── visualization.ipynb   # Visualization notebook
-│   ├── inputs/               # Pre-configured attitude files
-│   └── logs/                 # Training logs
-├── JaxMARL/                  # JAX-based MARL framework
-│   └── jaxmarl/             # Core MARL implementation
-└── README.md                # This file
+CoopCoins/
+├── README.md                 # Main project documentation
+├── LICENSE                   # MIT License
+├── requirements.txt          # Python dependencies
+├── configs/                  # Configuration files (attitudes, training presets)
+│   └── attitudes/
+├── coin_game/                # Main package: env, trainer, launchers, visualizers
+│   ├── launch_training.py
+│   ├── launch_specialized_training.py
+│   ├── comparing_policies.ipynb
+│   ├── trainer.py
+│   ├── analysis.ipynb
+│   ├── visualization.ipynb
+│   └── visualize_rllib_models.py
+├── JaxMARL/                  # Local copy of JaxMARL used by the project
+├── scripts/                  # Utility scripts: generate, batch-run, visualize
+│   ├── generate_attitudes.py
+│   ├── training.py
+│   └── example_visualization.py
+├── docs/                     # Documentation (md files)
+├── examples/                 # Example scripts and notebooks
+└── tests/                    # Unit / integration tests
 ```
 
 ## Research Applications

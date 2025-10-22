@@ -18,17 +18,17 @@ python examples/basic_training.py
 
 ### 2. Using Pre-configured Attitudes
 
-Train with different cooperative attitudes:
+Train with different cooperative attitudes (use `coin_game/trainer.py` entrypoint):
 
 ```bash
 # Selfish agents
-python coin_game/training.py configs/attitudes/selfish.txt 0 0.001 3
+python coin_game/trainer.py configs/attitudes/selfish.txt 0 0.001 3
 
 # Cooperative agents
-python coin_game/training.py configs/attitudes/cooperative.txt 0 0.001 3
+python coin_game/trainer.py configs/attitudes/cooperative.txt 0 0.001 3
 
 # Altruistic agents
-python coin_game/training.py configs/attitudes/altruistic.txt 0 0.001 3
+python coin_game/trainer.py configs/attitudes/altruistic.txt 0 0.001 3
 ```
 
 ## Configuration
@@ -94,26 +94,33 @@ params, timestamp = make_train(config)
 
 ### 2. Command Line Training
 
+The primary CLI entrypoint is `coin_game/trainer.py` (script wrapper that selects Jax vs RLlib flows).
+
 ```bash
-python coin_game/training.py <attitude_file> <dilemma> <lr> <grid_size>
+python coin_game/trainer.py <attitude_file> <dilemma> <lr> <grid_size> [cluster] [seed]
 ```
 
 Parameters:
-- `attitude_file`: Path to attitude configuration file
+- `attitude_file`: Path to attitude configuration file (two-line `alpha beta` per agent)
 - `dilemma`: 0 for no dilemma, 1 for prisoner's dilemma
 - `lr`: Learning rate
 - `grid_size`: Grid size
+- `cluster` (optional): one of `brigit|cuenca|local` (used to select save paths) or omitted
+- `seed` (optional): integer seed for reproducible runs
 
 ### 3. Batch Training
 
-Run multiple experiments automatically:
+Use the repository batch launcher located at `scripts/training.py` to iterate over attitude files and run many experiments automatically.
 
 ```bash
-# Generate attitude configurations
-python scripts/generate_attitudes.py --predefined
+# Generate attitude configurations if needed (angles or named)
+python scripts/generate_attitudes.py --angles 0,45,90
 
-# Run batch training
-python scripts/batch_training.py --configs configs/attitudes/ --dilemma 0 --lr 0.001
+# Dry-run to preview
+python scripts/training.py --configs configs/attitudes --dry-run
+
+# Launch batch experiments
+python scripts/training.py --configs configs/attitudes --rllib Yes --dilemma 0 --lr 0.001 --grid-size 3
 ```
 
 ## Hyperparameter Tuning

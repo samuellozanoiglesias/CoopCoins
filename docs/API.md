@@ -244,8 +244,11 @@ obs, state, rewards, dones, infos = env.step(key, state, actions)
 
 ### Training Example
 
+The project exposes training entrypoints in `coin_game/`. The low-level JAX-based `make_train` lives in the `JaxMARL/` copy included with the repository, while higher-level wrappers and CLI entrypoints are in `coin_game/`.
+
 ```python
-from jaxmarl.environments.coin_game.make_train import make_train
+# High-level programmatic training (recommended)
+from coin_game.trainer import make_train
 
 config = {
     "NUM_ENVS": 4,

@@ -1,0 +1,7 @@
+name: JaxMARL_TFM
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - ipykernel
+prefix: /data/samuel_lozano/anaconda3/envs/JaxMARL_TFM

@@ -23,7 +23,7 @@ Welcome to the CoopCoins documentation! This guide will help you navigate the do
 ## Installation
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10
 - JAX (with appropriate backend)
 - Ray RLlib (optional, for advanced training)
 
@@ -55,7 +55,7 @@ main()
 
 ### 3. Generate Configurations
 ```bash
-python scripts/generate_attitudes.py --predefined
+python scripts/generate_attitudes.py --angles 0,45,90
 ```
 
 ## Configuration
@@ -154,9 +154,9 @@ For systematic research:
    ```
 
 2. **Run batch experiments**:
-   ```bash
-   python scripts/batch_training.py --configs configs/attitudes/ --dilemma 0 --lr 0.001
-   ```
+```bash
+python scripts/training.py --configs configs/attitudes/ --dilemma 0 --lr 0.001
+```
 
 3. **Analyze results**:
    ```bash
@@ -173,9 +173,9 @@ For development work:
    ```
 
 2. **Test different attitudes**:
-   ```bash
-   python coin_game/training.py configs/attitudes/cooperative.txt 0 0.001 3
-   ```
+```bash
+python coin_game/trainer.py configs/attitudes/cooperative.txt 0 0.001 3
+```
 
 3. **Visualize behavior**:
    ```bash
@@ -187,9 +187,9 @@ For development work:
 For large-scale training:
 
 1. **Use RLlib integration**:
-   ```python
-   from src.environments.coin_game_rllib import CoinGameRLLibEnv
-   ```
+```python
+from JaxMARL.jaxmarl.environments.coin_game.coin_game_rllib_env import CoinGameRLLibEnv
+```
 
 2. **Configure distributed training**:
    ```yaml
