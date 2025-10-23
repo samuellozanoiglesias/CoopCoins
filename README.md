@@ -156,7 +156,7 @@ python scripts/training.py configs/attitudes/individualistic_cooperative.txt 0 0
 
 If you need a different format or a custom sweep, you can edit `scripts/generate_attitudes.py` to change the naming or coefficient generation.
 
-## Generating trained agents with different attitudes (scripts/training.py)
+### Generating trained agents with different attitudes (scripts/training.py)
 
 Launches a series of training experiments for every attitude file in a directory. It builds a command that calls `coin_game/trainer.py` for each attitude and writes logs to a per-experiment file. Useful flags include `--configs` to point to the attitudes directory, `--dilemma` to toggle the game variant, `--lr` and `--grid-size` to set hyperparameters, and `--dry-run` to preview commands.
 
