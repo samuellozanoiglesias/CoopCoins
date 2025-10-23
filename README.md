@@ -322,7 +322,7 @@ If you use CoopCoins in your research, please cite:
 
 ```bibtex
 @misc{coopcoins2024,
-  title={CoopCoins: A Multi-Agent Environment for Studying Cooperative Behavior},
+  title={CoopCoins: A Multi-Agent Environment for Studying Collective Behavior},
   author={Samuel Lozano},
   year={2024},
   url={https://github.com/samuellozanoiglesias/CoopCoins}
