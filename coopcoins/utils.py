@@ -16,25 +16,31 @@ def _yaml(path):
         return yaml.safe_load(f)
 
 
-def map_name(grid_size, num_agents):
-    return f"grid{grid_size}_agents{num_agents}"
+def map_name(grid_size, num_agents, num_coins=None):
+    base = f"grid{grid_size}_agents{num_agents}"
+    return base if num_coins in (None, num_agents) else f"{base}_coins{num_coins}"
 
 
-def make_map(grid_size, num_agents, cfg):
-    """A map: grid size + agents (coins = agents). Game length and payoff are global to the experiment."""
-    return {"name": map_name(grid_size, num_agents), "grid_size": int(grid_size), "num_agents": int(num_agents),
-            "num_coins": int(num_agents), "episode_len": int(cfg["episode_len"]), "payoff": cfg["payoff"],
-            "density": round(num_agents / grid_size ** 2, 4), "ratio": round(grid_size / num_agents, 4)}
+def make_map(grid_size, num_agents, cfg, num_coins=None):
+    """A map: grid size, agents and coins (default coins = agents). Game length and payoff are experiment-wide."""
+    m = int(num_coins or num_agents)
+    return {"name": map_name(grid_size, num_agents, m), "grid_size": int(grid_size), "num_agents": int(num_agents),
+            "num_coins": m, "episode_len": int(cfg["episode_len"]), "payoff": cfg["payoff"],
+            "density": round(num_agents / grid_size ** 2, 4), "ratio": round(grid_size / num_agents, 4),
+            "coins_per_agent": round(m / num_agents, 4)}
 
 
 def map_from_name(name, cfg):
-    g, n = map(int, re.fullmatch(r"grid(\d+)_agents(\d+)", name).groups())
-    return make_map(g, n, cfg)
+    g, n, m = re.fullmatch(r"grid(\d+)_agents(\d+)(?:_coins(\d+))?", name).groups()
+    return make_map(int(g), int(n), cfg, int(m) if m else None)
 
 
 def family_maps(fam, cfg):
-    """density: num_agents = base_agents * (G / base_grid)^2, rounded to an even number
-       ratio:   num_agents = base_agents * G / base_grid, must be an even integer"""
+    """density:  num_agents = base_agents * (G / base_grid)^2, rounded to an even number
+       ratio:    num_agents = base_agents * G / base_grid, must be an even integer
+       explicit: maps: [[grid_size, num_agents, num_coins], ...]"""
+    if fam["keep"] == "explicit":
+        return [make_map(g, n, cfg, m) for g, n, m in fam["maps"]]
     out = []
     for g in fam["grid_sizes"]:
         if fam["keep"] == "density":

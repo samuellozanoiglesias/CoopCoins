@@ -41,3 +41,22 @@ python simulate.py --dirs <data_root>/all_maps/*/Training_<id> --maps grid12_age
 <data_root>/analysis/scaling_<id>/                       tables + figures (see analyze.py docstring)
 <data_root>/logs/
 ```
+
+## Before the full run
+
+```bash
+./smoke_test.sh     # whole pipeline on tiny settings in /tmp; must end with "SMOKE TEST PASSED"
+./speed_test.sh     # GPU + CPU speed with the full settings, extrapolated; writes speed_test_<time>.log
+```
+
+## Social-influence study (strategic vs ecological)
+
+`configs/influence.yaml` sets the focal attitude, the partners (first = reference) and which trainings each
+experiment uses. Definitions are in `coopcoins/influence.py` and `analyze_influence.py`.
+
+| script | what | trains? | output |
+|---|---|---|---|
+| `run_exp1.sh` | cross-play decomposition, scaling_v1 agents | no | `influence/scaling_v1/crossplay_games.csv`, `influence/analysis/exp1/` |
+| `run_exp2.sh` | synthetic + state-matched policy probes | no | `influence/scaling_v1/probe_*.csv`, `influence/analysis/exp2/` |
+| `run_exp3.sh` | scarcity x group size (new trainings) | yes, ~3.5 h GPU | `scarcity_v1` trainings, `influence/scarcity_v1/`, `influence/analysis/exp3/` |
+| `run_exp4.sh` | observational estimates vs truth | no | `influence/analysis/exp4/` |

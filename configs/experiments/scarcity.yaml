@@ -1,0 +1,55 @@
+# Experiment 3 trainings: fewer coins than agents (scarcity), at several group sizes.
+# The coins = agents versions of these maps are NOT retrained: they are reused from scaling_v1
+# (grid4_agents4, grid6_agents8, grid8_agents14, grid10_agents22).
+data_root: /data/samuel_lozano/CoopCoins
+attitudes: configs/attitudes.yaml
+
+episode_len: 150
+payoff: {own: 1, other: 1, penalty: -2}
+
+families:
+  scarcity:
+    keep: explicit
+    maps:                   # [grid_size, num_agents, num_coins]  (coins per agent ~ 0.5 and ~ 0.25)
+      - [4, 4, 2]
+      - [6, 8, 4]
+      - [6, 8, 2]
+      - [8, 14, 8]
+      - [8, 14, 4]
+      - [10, 22, 12]
+      - [10, 22, 6]
+
+training:
+  generalist: false
+  specialists: true
+
+pairs:
+  - [individualistic, individualistic]
+  - [individualistic, cooperative]
+  - [individualistic, competitive]
+
+seeds: 10
+
+train:                      # identical to scaling.yaml
+  num_episodes: 5000
+  num_envs: 1
+  num_checkpoints: 5
+  log_every: 10
+  lr: 0.001
+  gamma: 0.9
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  update_epochs: 4
+  num_minibatches: 15
+  hidden: 64
+  max_parallel_runs: 0
+
+simulation:
+  maps: trained
+  num_sims: 20
+  checkpoints: last
+  deterministic: false
+  num_gifs: 2

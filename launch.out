@@ -1,4 +1,0 @@
-nohup: ignoring input
-[vie 13 nov 2026 11:32:07 CET] training_id=scaling_v1: starting generalist and specialists
-[vie 13 nov 2026 11:34:08 CET] generalist training FAILED (see its log)
-[vie 13 nov 2026 15:32:11 CET] specialist training FAILED (see its log)

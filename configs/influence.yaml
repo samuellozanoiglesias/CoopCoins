@@ -1,0 +1,15 @@
+# Social-influence study (strategic vs ecological influence). Reuses the trained agents.
+focal: individualistic                                  # attitude of the focal (red) team
+partners: [individualistic, cooperative, competitive]   # partner attitudes; the first one is the reference R
+
+crossplay:
+  num_sims: 20              # games per (focal seed, partner seed) pairing and per cell
+  seed_shift: 1             # partner seed = (focal seed + shift) % n_seeds in every cell (cross-seed pairing)
+
+probes:
+  pool_sims: 2              # games per seed used to collect real decision states
+  pool_size: 4000           # decision states kept per (map, world)
+
+experiments:                # which trainings each experiment uses (training sets come from the experiment yaml)
+  exp1: {experiment: configs/experiments/scaling.yaml,  training_id: scaling_v1}
+  exp3: {experiment: configs/experiments/scarcity.yaml, training_id: scarcity_v1}
