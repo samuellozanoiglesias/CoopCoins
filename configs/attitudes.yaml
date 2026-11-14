@@ -1,0 +1,11 @@
+# Attitude = angle theta (degrees) on the unit circle of reward weights:
+#   r_i = alpha * r_own + beta * r_partner,   alpha = cos(theta), beta = sin(theta)
+# Add any custom attitude here (name: angle) and use its name in an experiment's `pairs`.
+individualistic: 0
+cooperative: 45
+altruistic: 90
+sacrificial: 135
+martyrial: 180
+destructive: 225
+spiteful: 270
+competitive: 315
