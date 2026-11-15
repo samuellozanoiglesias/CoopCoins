@@ -1,0 +1,55 @@
+nohup: ignoring input
+== unit tests
+...................                                                      [100%]
+19 passed in 43.55s
+== tiny pipeline in /tmp/coopcoins_k_smoke
+[2026-11-15 14:25:41] k0: training payoff_k0_v1 (/tmp/coopcoins_k_smoke/configs/payoff_k0.yaml) -> /tmp/coopcoins_k_smoke/data/logs/k_train_k0_2026-11-15_14-25-41.log
+[2026-11-15 14:26:43] k2: training payoff_k2_v1 (/tmp/coopcoins_k_smoke/configs/payoff_k2.yaml) -> /tmp/coopcoins_k_smoke/data/logs/k_train_k2_2026-11-15_14-26-43.log
+[2026-11-15 14:27:45] k10: training payoff_k10_v1 (/tmp/coopcoins_k_smoke/configs/payoff_k10.yaml) -> /tmp/coopcoins_k_smoke/data/logs/k_train_k10_2026-11-15_14-27-45.log
+[2026-11-15 14:28:44] training done
+[2026-11-15 14:28:47] k0: simulate + crossplay + probes -> /tmp/coopcoins_k_smoke/data/logs/k_evaluate_k0_2026-11-15_14-28-47.log
+[2026-11-15 14:29:33] k2: simulate + crossplay + probes -> /tmp/coopcoins_k_smoke/data/logs/k_evaluate_k2_2026-11-15_14-29-33.log
+[2026-11-15 14:30:19] k10: simulate + crossplay + probes -> /tmp/coopcoins_k_smoke/data/logs/k_evaluate_k10_2026-11-15_14-30-19.log
+[2026-11-15 14:31:03] evaluation done
+[2026-11-15 14:31:05] k0: per-arm analyses -> /tmp/coopcoins_k_smoke/data/logs/k_analyse_k0_2026-11-15_14-31-05.log
+[2026-11-15 14:31:41] k2: per-arm analyses -> /tmp/coopcoins_k_smoke/data/logs/k_analyse_k2_2026-11-15_14-31-40.log
+[2026-11-15 14:32:16] k10: per-arm analyses -> /tmp/coopcoins_k_smoke/data/logs/k_analyse_k10_2026-11-15_14-32-16.log
+[2026-11-15 14:32:51] cross-k analysis -> /tmp/coopcoins_k_smoke/data/logs/k_analyse_cross_k_2026-11-15_14-32-51.log
+  individualistic->competitive       coin_rate     slope -0.00514 [-0.00696,-0.00332]  p  <0.0005  q 0.000689
+  individualistic->competitive       contest_rate  slope -0.01250 [-0.01764,-0.00112]  p  <0.0005  q 0.000689
+  individualistic->competitive       defence_rate  slope +0.02239 [-0.00090,+0.04568]  p    0.469  q 0.498
+  individualistic->competitive       efficiency    slope +0.00744 [+0.00457,+0.01031]  p  <0.0005  q 0.000689
+  individualistic->competitive       other_rate    slope -0.01301 [-0.01635,-0.00968]  p  <0.0005  q 0.000689
+  individualistic->competitive       own_rate      slope +0.00787 [+0.00636,+0.00938]  p  <0.0005  q 0.000689
+  individualistic->competitive       pure_rate     slope +0.01715 [+0.01656,+0.01774]  p  <0.0005  q 0.000689
+  individualistic->competitive       restraint     slope +0.02275 [+0.01748,+0.02801]  p  <0.0005  q 0.000689
+  individualistic->competitive       steal_frac    slope -0.02306 [-0.02776,-0.01835]  p  <0.0005  q 0.000689
+  individualistic->cooperative       coin_rate     slope -0.00211 [-0.00434,+0.00011]  p    0.469  q 0.498
+  individualistic->cooperative       contest_rate  slope +0.01470 [+0.01090,+0.01849]  p  <0.0005  q 0.000689
+  individualistic->cooperative       defence_rate  slope +nan [+nan,+nan]  p           q nan
+  individualistic->cooperative       efficiency    slope -0.00444 [-0.00770,-0.00119]  p  <0.0005  q 0.000689
+  individualistic->cooperative       other_rate    slope +0.00194 [+0.00089,+0.00299]  p  <0.0005  q 0.000689
+  individualistic->cooperative       own_rate      slope -0.00406 [-0.00733,-0.00078]  p  <0.0005  q 0.000689
+  individualistic->cooperative       pure_rate     slope -0.00882 [-0.01517,-0.00246]  p  <0.0005  q 0.000689
+  individualistic->cooperative       restraint     slope -0.00300 [-0.00472,-0.00128]  p  <0.0005  q 0.000689
+  individualistic->cooperative       steal_frac    slope +0.00471 [+0.00225,+0.00717]  p  <0.0005  q 0.000689
+
+outputs in /tmp/coopcoins_k_smoke/data/influence/analysis/k_sweep
+[2026-11-15 14:33:02] analysis done: /tmp/coopcoins_k_smoke/data/influence/analysis/k_sweep/
+== benchmark (full configs, one update per arm)
+2026-11-15 14:34:28.270453: W external/xla/xla/tsl/framework/bfc_allocator.cc:501] Allocator (GPU_0_bfc) ran out of memory trying to allocate 2.02GiB (rounded to 2173978112)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+2026-11-15 14:34:28.271242: W external/xla/xla/tsl/framework/bfc_allocator.cc:512] __________________________________________________________________________________________________**
+E1115 14:34:28.271312    2707 pjrt_stream_executor_client.cc:2916] Execution of replica 0 failed: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2173978096 bytes. [tf-allocator-allocation-error='']
+jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/samuel_lozano/CoopCoins/experiments/benchmark.py", line 61, in <module>
+    main()
+  File "/home/samuel_lozano/CoopCoins/experiments/benchmark.py", line 45, in main
+    r, out = chunk_v(r, a.updates)
+jaxlib._jax.XlaRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2173978096 bytes.

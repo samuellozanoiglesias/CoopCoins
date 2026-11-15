@@ -4,9 +4,11 @@ attitude B, for every A, B in `partners`, on every map of every training set.
 
     python crossplay.py --exp exp1          # trainings of configs/influence.yaml -> experiments.exp1
     python crossplay.py --exp exp3 --sets grid6_agents8_coins4
+    python crossplay.py --influence configs/influence_k.yaml --exp k10
 
 Output: <data_root>/influence/<training_id>/crossplay_games.csv, one row per
-(training set, map, train_partner A, play_partner B, pairing, focal seed, sim seed, team) with per-agent game totals.
+(training set, map, train_partner A, play_partner B, pairing, focal seed, sim seed, team) with per-agent game totals
+(coin stats, tie stats, defence / contest counts; mem_* = per-step means of the memory features) and the payoff.
 pairing = cross (focal seed s vs partner seed s + shift; used for the decomposition)
         | co    (the original co-trained pair, same run; control for co-adaptation, only when A == B)
 """
@@ -20,13 +22,13 @@ import pandas as pd
 
 from coopcoins.influence import combine, env_tools, load_team, partner_dirs, set_maps, sim_keys
 from coopcoins.simulation import SIM_STATS
-from coopcoins.utils import _yaml, load_experiment
+from coopcoins.utils import _yaml, load_experiment, payoff_columns
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--influence", default="configs/influence.yaml")
-    ap.add_argument("--exp", required=True, help="key under experiments: in the influence config (exp1, exp3)")
+    ap.add_argument("--exp", required=True, help="key under experiments: in the influence config (exp1, exp3, k0, ...)")
     ap.add_argument("--sets", default=None, help="comma list of training sets (default: all of the experiment)")
     ap.add_argument("--num_sims", type=int, default=None)
     a = ap.parse_args()
@@ -67,7 +69,7 @@ def main():
                         "training_id": tid, "training_set": tset["name"],
                         "training": "generalist" if tset["name"] == "all_maps" else "specialist",
                         "map": m["name"], "grid_size": m["grid_size"], "num_agents": m["num_agents"],
-                        "num_coins": m["num_coins"], "episode_len": m["episode_len"],
+                        "num_coins": m["num_coins"], "episode_len": m["episode_len"], **payoff_columns(m["payoff"]),
                         "train_partner": A, "play_partner": B, "pairing": pairing,
                         "focal_seed": np.repeat(seeds, num_sims),
                         "partner_seed": np.repeat(np.roll(pseeds, -s), num_sims),

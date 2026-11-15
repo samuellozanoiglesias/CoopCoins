@@ -25,8 +25,8 @@ import pandas as pd
 from coopcoins.env import make_env
 from coopcoins.plots import simulation_plot
 from coopcoins.simulation import SIM_STATS, make_recorder, make_simulator
-from coopcoins.utils import (load_checkpoint, load_experiment, load_yaml, map_from_name, save_yaml, stack_teams,
-                             training_dir)
+from coopcoins.utils import (load_checkpoint, load_experiment, load_yaml, map_from_name, payoff_columns, save_yaml,
+                             stack_teams, training_dir)
 
 
 _SIMS = {}
@@ -34,7 +34,7 @@ _SIMS = {}
 
 def get_simulator(m, deterministic):
     """Compile once per (map, policy mode) and reuse across training directories."""
-    key = (m["name"], m["episode_len"], str(m["payoff"]), deterministic)
+    key = (m["name"], m["episode_len"], str(m["payoff"]), str(m["memory"]), deterministic)
     if key not in _SIMS:
         env = make_env(**m)
         _SIMS[key] = (env, make_simulator(env, deterministic))
@@ -53,7 +53,8 @@ def eval_maps(cfg, spec):
     if spec == "all":
         return cfg["experiment_maps"]
     names = spec.split(",") if isinstance(spec, str) else spec
-    base = {"episode_len": cfg["maps"][0]["episode_len"], "payoff": cfg["maps"][0]["payoff"]}
+    base = {"episode_len": cfg["maps"][0]["episode_len"], "payoff": cfg["maps"][0]["payoff"],
+            "memory": cfg["maps"][0]["memory"]}
     return [map_from_name(n, base) for n in names]
 
 
@@ -90,13 +91,13 @@ def simulate_dir(d, maps=None, checkpoints=None, num_sims=None, deterministic=No
             out.mkdir(parents=True, exist_ok=True)
             games = pd.concat([pd.DataFrame({
                 "map": m["name"], "grid_size": env.grid_size, "num_agents": env.num_agents,
-                "train_seed": np.repeat(train_seeds, S), "sim_seed": np.tile(sim_seeds, R), "team": k,
+                **payoff_columns(m["payoff"]), "train_seed": np.repeat(train_seeds, S), "sim_seed": np.tile(sim_seeds, R), "team": k,
                 "attitude": pair[k], "partner": pair[1 - k],
                 **{st: res[:, :, j][..., env.agent_team == k].mean(-1).ravel() for j, st in enumerate(SIM_STATS)}})
                 for k in (0, 1)])
             games.to_csv(out / "games.csv", index=False)
             per_seed = games.groupby(["team", "train_seed"])[SIM_STATS].mean()
-            summary = {"pair": pair, "map": m["name"], "episode": ep, "trained_on": [x["name"] for x in cfg["maps"]],
+            summary = {"pair": pair, "map": m["name"], "episode": ep, "payoff": dict(m["payoff"]), "trained_on": [x["name"] for x in cfg["maps"]],
                        "games_per_training_seed": int(S), "game_len": env.episode_len, "policy": mode,
                        "values": "per agent per game, averaged over the team's members"}
             for k in (0, 1):

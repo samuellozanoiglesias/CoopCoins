@@ -1,0 +1,55 @@
+# Theft-penalty sweep, arm k = 0 (training_id payoff_k0_v1). See docs/experiment_k.md.
+# Identical to scaling.yaml except: payoff penalty = -0, generalist only.
+data_root: /data/samuel_lozano/CoopCoins
+attitudes: configs/attitudes.yaml
+
+episode_len: 150                      # steps per game, identical on every map, in training and simulation
+payoff: {own: 1, other: 1, penalty: 0}  # theft penalty k = 0  (placebo: theft harms nobody)
+memory: {decay: 0.9}                  # EMA decay of the 4 memory features
+
+families:
+  density:                            # agents per cell constant (2 / 9): expect the same score per agent
+    keep: density
+    grid_sizes: [3, 4, 5, 6, 7, 8, 9, 10]   # -> 2, 4, 6, 8, 10, 14, 18, 22 agents
+    base_grid: 3
+    base_agents: 2
+
+training:
+  generalist: true                    # one pair of team policies trained on ALL maps  -> folder all_maps/
+  specialists: false                  # available (true, or train.py --specialists) but not run in this study
+
+pairs:                                # [red team, blue team]; members of a team are always cooperative with each other
+  - [individualistic, individualistic]
+  - [individualistic, cooperative]
+  - [individualistic, competitive]
+
+seeds: 10
+
+train:
+  num_episodes: 5000        # games per map (game length fixed above)
+  num_envs: 1               # games per map per PPO update
+  num_checkpoints: 5        # evenly spaced, plus episode 0
+  log_every: 10             # updates averaged per row of training_stats.csv
+  lr: 0.001
+  gamma: 0.9
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  clip:                     # actor and critic subtrees clipped separately (was one joint max_grad_norm: 0.5)
+    max_grad_norm_actor: 0.5
+    max_grad_norm_critic: 0.5
+  return_norm:              # running return statistics per team and run; critic predicts normalised values
+    eps: 1.0e-8
+    init_std: 1.0
+  update_epochs: 4
+  num_minibatches: 15
+  hidden: 64
+  max_parallel_runs: 0      # 0 = all (pair x seed) runs of a training set in one vmapped batch
+
+simulation:
+  maps: trained             # trained (maps of the training set) | all (every map of the experiment) | list of names
+  num_sims: 20              # games per trained pair of team policies (per training seed)
+  checkpoints: last         # last | all | "1000,5000"
+  deterministic: false
+  num_gifs: 2               # used only with --render

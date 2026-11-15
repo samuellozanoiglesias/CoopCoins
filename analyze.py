@@ -10,6 +10,7 @@ training = generalist (trained on all maps) | specialist (trained only on the ma
 Behaviour (per agent; rates are per game step, the game length is the same on every map):
   own_rate, other_rate   own-team / other-team coins taken per step
   steal_frac             other / (own + other): share of collected coins that were stolen
+  (coins count WINS: ties on a coin are broken at random; k = theft penalty, column k)
   restraint              missed_other / (missed_other + other): P(leave an adjacent enemy coin)
   efficiency             own / (own + missed_own): P(take an adjacent own coin)
 Outcomes: pure_rate (score / step), coherence_rate (attitude reward / step, the poster's coherence),
@@ -31,12 +32,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from coopcoins.utils import load_experiment, save_yaml, training_dir
+from coopcoins.utils import load_experiment, payoff_columns, save_yaml, training_dir
 
 BEHAVIOUR = ["own_rate", "other_rate", "steal_frac", "restraint", "efficiency"]
 OUTCOMES = ["pure_rate", "coherence_rate", "welfare_rate", "advantage_rate"]
 METRICS = BEHAVIOUR + OUTCOMES
-KEYS = ["training", "trained_on", "map", "grid_size", "num_agents", "attitude", "partner"]
+KEYS = ["training", "trained_on", "map", "grid_size", "num_agents", "k", "attitude", "partner"]
 RNG = np.random.default_rng(0)
 
 
@@ -60,6 +61,7 @@ def collect(cfg, tid, policy):
                 rows.append(pd.DataFrame({
                     "training": "generalist" if tset["name"] == "all_maps" else "specialist",
                     "trained_on": tset["name"], "map": s["map"], "grid_size": s.grid_size, "num_agents": s.num_agents,
+                    "k": s["k"],
                     "attitude": s.attitude, "partner": s.partner, "seed": s.train_seed,
                     "own_rate": s.own_coins / T, "other_rate": s.other_coins / T,
                     "steal_frac": s.other_coins / taken.replace(0, np.nan),
@@ -238,7 +240,8 @@ def main():
     fig_scaling(summ, families, out)
     fig_influence(con, families, out)
     fig_gap(gap, out)
-    save_yaml({"config": a.config, "training_id": a.training_id, "policy": a.policy, "families": families},
+    save_yaml({"config": a.config, "training_id": a.training_id, "policy": a.policy, "families": families,
+               "payoff": dict(cfg["payoff"]), **{c: float(v) for c, v in payoff_columns(cfg["payoff"]).items()}},
               out / "analysis.yaml")
 
     c = con[(con.attitude == "individualistic") & (con.metric == "steal_frac")]

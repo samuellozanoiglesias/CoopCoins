@@ -22,10 +22,12 @@ def map_name(grid_size, num_agents, num_coins=None):
 
 
 def make_map(grid_size, num_agents, cfg, num_coins=None):
-    """A map: grid size, agents and coins (default coins = agents). Game length and payoff are experiment-wide."""
+    """A map: grid size, agents and coins (default coins = agents). Game length, payoff and memory are
+    experiment-wide."""
     m = int(num_coins or num_agents)
     return {"name": map_name(grid_size, num_agents, m), "grid_size": int(grid_size), "num_agents": int(num_agents),
-            "num_coins": m, "episode_len": int(cfg["episode_len"]), "payoff": cfg["payoff"],
+            "num_coins": m, "episode_len": int(cfg["episode_len"]), "payoff": dict(cfg["payoff"]),
+            "memory": dict(cfg["memory"]),
             "density": round(num_agents / grid_size ** 2, 4), "ratio": round(grid_size / num_agents, 4),
             "coins_per_agent": round(m / num_agents, 4)}
 
@@ -37,7 +39,6 @@ def map_from_name(name, cfg):
 
 def family_maps(fam, cfg):
     """density:  num_agents = base_agents * (G / base_grid)^2, rounded to an even number
-       ratio:    num_agents = base_agents * G / base_grid, must be an even integer
        explicit: maps: [[grid_size, num_agents, num_coins], ...]"""
     if fam["keep"] == "explicit":
         return [make_map(g, n, cfg, m) for g, n, m in fam["maps"]]
@@ -45,18 +46,26 @@ def family_maps(fam, cfg):
     for g in fam["grid_sizes"]:
         if fam["keep"] == "density":
             n = 2 * int(round(fam["base_agents"] / 2 * (g / fam["base_grid"]) ** 2))
-        elif fam["keep"] == "ratio":
-            n = fam["base_agents"] * g / fam["base_grid"]
-            assert n == int(n) and int(n) % 2 == 0, f"ratio family: grid {g} gives {n} agents (needs an even integer)"
         else:
             raise ValueError(fam["keep"])
         out.append(make_map(g, int(n), cfg))
     return out
 
 
+def payoff_columns(payoff):
+    """Columns written to every CSV: payoff_own, payoff_other, payoff_penalty and k = -payoff_penalty."""
+    from .env import check_payoff
+    own, other, pen = check_payoff(payoff)
+    return {"payoff_own": own, "payoff_other": other, "payoff_penalty": pen, "k": 0.0 - pen}  # 0.0 - x: no -0.0
+
+
 def load_experiment(path):
     cfg = _yaml(path)
     cfg["name"] = cfg.get("name") or Path(path).stem
+    for key in ("payoff", "memory"):
+        if key not in cfg:
+            raise KeyError(f"{path}: missing required top-level key '{key}'")
+    payoff_columns(cfg["payoff"])  # validates the payoff keys
     cfg["families"] = {k: family_maps(f, cfg) for k, f in cfg["families"].items()}
     cfg["maps"] = {m["name"]: m for fam in cfg["families"].values() for m in fam}       # unique maps
     for m in cfg["maps"].values():

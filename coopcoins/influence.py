@@ -18,7 +18,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .env import FEATURES, NO_TEAMMATE, STEP_SCALE, make_env
+from .env import FEATURES, MEMORY, N_BASE, NO_TEAMMATE, STEP_SCALE, make_env
 from .networks import policy_logits
 from .ppo import per_agent
 from .simulation import make_simulator
@@ -130,15 +130,44 @@ def choice_probs(params, coins, mask, batch=2048):
     return tuple(np.concatenate([o[k] for o in outs], axis=1) for k in range(3))
 
 
+def world_memory(crossplay, training_set, map_name, partners):
+    """Mean memory features of the focal team (team 0) in world B = cell (trained with B, plays B, cross pairing)
+    of one map, from crossplay_games.csv -> {B: (4,) array}."""
+    d = crossplay[(crossplay.training_set == training_set) & (crossplay["map"] == map_name) & (crossplay.team == 0)
+                  & (crossplay.pairing == "cross") & (crossplay.train_partner == crossplay.play_partner)]
+    out = {}
+    for B in partners:
+        g = d[d.play_partner == B]
+        if g.empty:
+            raise ValueError(f"no cross-play rows for world {B} on {training_set}/{map_name}: run crossplay.py first")
+        out[B] = g[list(MEMORY)].mean().to_numpy(np.float32)
+    return out
+
+
 # ------------------------------------------------------------------ synthetic probes
 def max_dist(grid_size):
     return 2 * (grid_size // 2)
 
 
-def probe_grid(grid_size, num_agents):
+def probe_state_set(grid_size, num_agents):
+    """Identifier of the synthetic state set of a map. Maps with the same id get IDENTICAL baseline (memory = 0)
+    synthetic states, so a generalist policy gives identical probe results on them (pseudo-replication)."""
+    return f"maxdist{max_dist(grid_size)}_{'solo' if num_agents == 2 else 'team'}"
+
+
+def with_memory(coins, mask, memory):
+    """Copy of coins (K, P, F) with the memory features of every valid row set to `memory` (4,) or (K, 4)."""
+    coins = np.array(coins, copy=True)
+    mem = np.broadcast_to(np.asarray(memory, np.float32).reshape(-1, len(MEMORY)), (len(coins), len(MEMORY)))
+    coins[..., N_BASE:] = np.where(np.asarray(mask)[..., None], mem[:, None, :], 0.0)
+    return coins
+
+
+def probe_grid(grid_size, num_agents, memory=None):
     """Synthetic decision states with exactly two coins: coin 0 = own team's, coin 1 = other team's.
     Factors: my distance to each coin, nearest opponent's distance to each coin, whether an opponent chose each
     coin last step. Teammates are neutral (absent with 2 agents; farthest possible and not targeting otherwise).
+    memory: the 4 memory features (default 0 = baseline probe), the same on both rows.
     Returns coins (K, 2, F), mask (K, 2), factors (dict of (K,) arrays)."""
     md = max_dist(grid_size)
     my_levels = list(range(1, min(4, md) + 1))
@@ -167,7 +196,10 @@ def probe_grid(grid_size, num_agents):
         coins[:, c, F["has_teammates"]] = float(has_tm)
     factors = {"d_own": f[:, 0], "d_other": f[:, 1], "opp_own": f[:, 2], "opp_other": f[:, 3],
                "tgt_own": f[:, 4], "tgt_other": f[:, 5]}
-    return coins, np.ones((K, 2), bool), factors
+    mask = np.ones((K, 2), bool)
+    if memory is not None:
+        coins = with_memory(coins, mask, memory)
+    return coins, mask, factors
 
 
 PROBE_TERMS = ["colour_bias", "distance", "threat_own", "threat_other", "target_own", "target_other"]
@@ -187,9 +219,9 @@ def probe_design(factors):
                             factors["tgt_own"], factors["tgt_other"]])
 
 
-def probe_policy(params, grid_size, num_agents):
+def probe_policy(params, grid_size, num_agents, memory=None):
     """-> per seed regression coefficients (S, 6), mean P(stay) (S,), and per state probabilities."""
-    coins, mask, factors = probe_grid(grid_size, num_agents)
+    coins, mask, factors = probe_grid(grid_size, num_agents, memory)
     pr = np.asarray(_probs(params, jnp.asarray(coins), jnp.asarray(mask)))  # (S, K, 3)
     lo = np.log(pr[..., 0] + 1e-9) - np.log(pr[..., 1] + 1e-9)
     X = probe_design(factors)

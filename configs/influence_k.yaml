@@ -1,0 +1,16 @@
+# Social-influence pipeline for the theft-penalty sweep (docs/experiment_k.md). Same settings as influence.yaml.
+focal: individualistic                                  # attitude of the focal (red) team
+partners: [individualistic, cooperative, competitive]   # partner attitudes; the first one is the reference R
+
+crossplay:
+  num_sims: 20              # games per (focal seed, partner seed) pairing and per cell (as in the influence study)
+  seed_shift: 1             # partner seed = (focal seed + shift) % n_seeds in every cell (cross-seed pairing)
+
+probes:
+  pool_sims: 2              # games per seed used to collect real decision states
+  pool_size: 4000           # decision states kept per (map, world)
+
+experiments:                # one source per arm; analyze_influence.py --source k0|k2|k10
+  k0:  {experiment: configs/experiments/payoff_k0.yaml,  training_id: payoff_k0_v1}
+  k2:  {experiment: configs/experiments/payoff_k2.yaml,  training_id: payoff_k2_v1}
+  k10: {experiment: configs/experiments/payoff_k10.yaml, training_id: payoff_k10_v1}

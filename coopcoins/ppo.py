@@ -4,6 +4,13 @@ A training set is one or more maps. One update = `num_envs` games of `episode_le
 map of the set, then one PPO step per team on all the data of its members. With several maps
 this trains a single "generalist" pair of team policies that plays all of them.
 Independent runs (attitude pair x seed) are vmapped into one compiled program.
+
+Gradient clipping: the "actor" and "critic" subtrees of a team's parameters are each clipped by their own
+global norm (train.clip.max_grad_norm_actor / max_grad_norm_critic), then Adam.
+Return normalisation: running mean / variance of returns per team and per run (in Runner). The critic predicts
+normalised values; they are de-normalised (v * std + mean) before GAE, the statistics are updated from each
+update's batch of returns, and the critic is trained on (ret - mean) / std with the updated statistics.
+std = sqrt(var + eps); initial mean 0, var 1 (std 1), count 0.
 """
 from typing import NamedTuple
 import jax
@@ -13,11 +20,60 @@ import optax
 from .networks import init_policy, policy_logits, value
 
 
+class RetStats(NamedTuple):
+    mean: jnp.ndarray   # (2,) per team
+    var: jnp.ndarray    # (2,)
+    count: jnp.ndarray  # (2,)
+
+
 class Runner(NamedTuple):
     params: dict      # leading axis 2 = team
     opt_state: tuple
     key: jnp.ndarray
     coef: jnp.ndarray  # (2, 2): [alpha, beta] per team
+    ret_stats: RetStats
+
+
+def init_ret_stats(init_std=1.0):
+    # explicit float32 (not weak-typed): the runner returned by an update must have the same types as the initial
+    # one, or the first chunk is compiled twice
+    f32 = jnp.float32
+    return RetStats(jnp.zeros(2, f32), jnp.full(2, float(init_std) ** 2, f32), jnp.zeros(2, f32))
+
+
+def ret_std(st, eps):
+    return jnp.sqrt(st.var + eps)
+
+
+def update_ret_stats(st, x):
+    """Combine running stats with a batch x (2 teams, n) (parallel / Chan update; exact with count 0)."""
+    bm, bv, bc = x.mean(1), x.var(1), jnp.float32(x.shape[1])
+    tot = st.count + bc
+    delta = bm - st.mean
+    mean = st.mean + delta * bc / tot
+    m2 = st.var * st.count + bv * bc + jnp.square(delta) * st.count * bc / tot
+    return RetStats(mean, m2 / tot, tot)
+
+
+def global_norm(tree):
+    """L2 norm over all leaves: optax.tree.norm where available (optax.global_norm is deprecated)."""
+    tree_mod = getattr(optax, "tree", None)
+    return tree_mod.norm(tree) if hasattr(tree_mod, "norm") else optax.global_norm(tree)
+
+
+def labels(params):
+    """Optimizer partition: every leaf under 'actor' -> 'actor', under 'critic' -> 'critic'."""
+    return {k: jax.tree.map(lambda _: k, v) for k, v in params.items()}
+
+
+def make_optimizer(cfg, with_adam=True):
+    """Per-subtree global-norm clipping, then Adam (elementwise, so equivalent to one Adam over all params).
+    with_adam=False returns the clipping stage alone (tests)."""
+    c = cfg["clip"]
+    branch = lambda mx: optax.chain(optax.clip_by_global_norm(mx),
+                                    optax.adam(cfg["lr"], eps=1e-5) if with_adam else optax.identity())
+    return optax.multi_transform({"actor": branch(c["max_grad_norm_actor"]),
+                                  "critic": branch(c["max_grad_norm_critic"])}, labels)
 
 
 def per_agent(fn, params, agent_team, obs):
@@ -31,8 +87,11 @@ def per_agent(fn, params, agent_team, obs):
 
 
 def make_trainer(envs, cfg):
+    assert "max_grad_norm" not in cfg, "max_grad_norm was replaced by clip: {max_grad_norm_actor, max_grad_norm_critic}"
     E = cfg["num_envs"]
-    opt = optax.chain(optax.clip_by_global_norm(cfg["max_grad_norm"]), optax.adam(cfg["lr"], eps=1e-5))
+    opt = make_optimizer(cfg)
+    rn = cfg["return_norm"]
+    eps = float(rn["eps"])
     g, lam = cfg["gamma"], cfg["gae_lambda"]
     n_samples = sum(E * env.episode_len * env.num_agents // 2 for env in envs)   # per team per update
     n_mb = cfg["num_minibatches"]
@@ -41,9 +100,9 @@ def make_trainer(envs, cfg):
     def init(key, coef):
         k_net, key = jax.random.split(key)
         params = jax.vmap(lambda k: init_policy(k, cfg["hidden"]))(jax.random.split(k_net, 2))
-        return Runner(params, jax.vmap(opt.init)(params), key, coef)
+        return Runner(params, jax.vmap(opt.init)(params), key, coef, init_ret_stats(rn["init_std"]))
 
-    def play(env, params, coef, key):
+    def play(env, params, coef, key, stats):
         T, N = env.episode_len, env.num_agents
         k_reset, key = jax.random.split(key)
         obs, state = jax.vmap(env.reset)(jax.random.split(k_reset, E))
@@ -59,7 +118,8 @@ def make_trainer(envs, cfg):
 
         (_, last_obs, _), (obs, act, logp, pure, info) = jax.lax.scan(step, (state, obs, key), None, T)
         all_obs = jax.tree.map(lambda a, b: jnp.concatenate([a, b[None]]), obs, last_obs)
-        vals = per_agent(value, params, env.agent_team, all_obs)               # (T+1, E, N)
+        vals_n = per_agent(value, params, env.agent_team, all_obs)             # (T+1, E, N) normalised
+        vals = vals_n * ret_std(stats, eps)[env.agent_team] + stats.mean[env.agent_team]  # de-normalised
         rew = env.attitude_reward(pure, coef)
         # GAE; the game end is a time limit -> bootstrap from V(last obs)
         def f(adv_next, x):
@@ -97,21 +157,28 @@ def make_trainer(envs, cfg):
             def mb_step(carry, m):
                 params, opt_state = carry
                 grads, aux = grad_fn(params, *m)
+                norms = jax.vmap(lambda gr: jnp.stack([global_norm(gr["actor"]),
+                                                       global_norm(gr["critic"])]))(grads)  # pre-clip, (2, 2)
+                aux = jnp.concatenate([aux, norms], -1)
                 upd, opt_state = jax.vmap(opt.update)(grads, opt_state, params)
                 return (optax.apply_updates(params, upd), opt_state), aux
 
             return jax.lax.scan(mb_step, carry, mbs)
 
         (params, opt_state), aux = jax.lax.scan(epoch, (params, opt_state), jax.random.split(key, cfg["update_epochs"]))
-        return params, opt_state, aux.mean((0, 1))  # (2, 4)
+        return params, opt_state, aux.mean((0, 1))  # (2, 6)
 
     def train_update(r: Runner, _):
         keys = jax.random.split(r.key, len(envs) + 2)
-        batches, metrics = zip(*[play(env, r.params, r.coef, k) for env, k in zip(envs, keys[2:])])
-        batch = jax.tree.map(lambda *x: jnp.concatenate(x, axis=1), *batches)
-        params, opt_state, aux = update(r.params, r.opt_state, batch, keys[1])
-        losses = {"pg_loss": aux[:, 0], "vf_loss": aux[:, 1], "entropy": aux[:, 2], "approx_kl": aux[:, 3]}
-        return Runner(params, opt_state, keys[0], r.coef), (metrics, losses)  # metrics: one dict per map
+        batches, metrics = zip(*[play(env, r.params, r.coef, k, r.ret_stats) for env, k in zip(envs, keys[2:])])
+        obs, act, logp, adv, ret = jax.tree.map(lambda *x: jnp.concatenate(x, axis=1), *batches)
+        stats = update_ret_stats(r.ret_stats, ret)                     # update from this batch, then normalise
+        target = (ret - stats.mean[:, None]) / ret_std(stats, eps)[:, None]
+        params, opt_state, aux = update(r.params, r.opt_state, (obs, act, logp, adv, target), keys[1])
+        losses = {"pg_loss": aux[:, 0], "vf_loss": aux[:, 1], "entropy": aux[:, 2], "approx_kl": aux[:, 3],
+                  "actor_grad_norm": aux[:, 4], "critic_grad_norm": aux[:, 5],
+                  "return_mean": stats.mean, "return_std": ret_std(stats, eps)}
+        return Runner(params, opt_state, keys[0], r.coef, stats), (metrics, losses)  # metrics: one dict per map
 
     def train_chunk(r: Runner, n_updates: int):
         return jax.lax.scan(train_update, r, None, n_updates)

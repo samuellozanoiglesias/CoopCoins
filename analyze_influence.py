@@ -5,6 +5,7 @@
     python analyze_influence.py --exp 2   # policy probes: preference weights and state-matched policy effects
     python analyze_influence.py --exp 3   # decomposition vs scarcity and group size (scarcity_v1 + scaling_v1)
     python analyze_influence.py --exp 4   # what an observational study would conclude vs the true decomposition
+    python analyze_influence.py --influence configs/influence_k.yaml --source k10 --exp 1   # any trained source
 
 Definitions (focal team = red, individualistic; b[A, B] = focal behaviour when TRAINED with partner A and
 PLAYING with partner B; every b is a mean over training seeds, cross-seed pairing):
@@ -15,10 +16,17 @@ PLAYING with partner B; every b is a mean over training seeds, cross-seed pairin
     E + S = T;  strategic share = |S| / (|S| + |E|)
     co-adaptation C = b_co[A] - b[A, A]   (playing the exact co-trained partner vs another partner of the same type)
 95% CIs: bootstrap over training seeds (seed index resampled jointly across the cells it links), 2000 draws.
-Outputs: <data_root>/influence/analysis/exp<N>/
+p-values: two-sided bootstrap; never 0 (a p-value below the resolution is reported as "< 1/B", numeric = 1/B).
+q-values: Benjamini-Hochberg over all p-values of one output table (one analysis), next to each p.
+Generalist results on different maps come from the SAME training seeds: they are not independent replications.
+Extra metrics: defence_rate = P(choose an own coin | an opponent targeted it last step and my_dist <= opponent_dist),
+contest_rate = the same for other-team coins (NaN, and left out of means, for a seed/cell without any such
+opportunity); tie_rate = tie arrivals per agent-step, tie_win_rate = wins / arrivals.
+Outputs: <data_root>/influence/analysis/exp<N>/ (source exp1) or <data_root>/influence/analysis/<training_id>/exp<N>/
 """
 import argparse
 import itertools
+import warnings
 from pathlib import Path
 
 import matplotlib
@@ -27,15 +35,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from coopcoins.env import MEMORY
 from coopcoins.influence import PROBE_TERMS
 from coopcoins.utils import _yaml, load_experiment
 
 RNG = np.random.default_rng(0)
 NB = 2000
-METRICS = ["own_rate", "other_rate", "coin_rate", "steal_frac", "efficiency", "restraint", "pure_rate"]
-PLOT_METRICS = ["own_rate", "other_rate", "steal_frac", "pure_rate"]
-KEYS = ["training_id", "training_set", "training", "map", "grid_size", "num_agents", "num_coins",
+METRICS = ["own_rate", "other_rate", "coin_rate", "steal_frac", "efficiency", "restraint", "pure_rate",
+           "defence_rate", "contest_rate"]
+PLOT_METRICS = ["own_rate", "other_rate", "steal_frac", "pure_rate", "defence_rate", "contest_rate"]
+TIE_METRICS = ["tie_rate", "tie_win_rate"]
+KEYS = ["training_id", "training_set", "training", "map", "grid_size", "num_agents", "num_coins", "k",
         "train_partner", "play_partner", "pairing"]
+NOTE = ("Bootstrap over training seeds ({nb} draws; seed index resampled jointly across linked cells). "
+        "p-values are never 0: p < 1/B is reported as '<{res:g}' (numeric column = {res:g}). "
+        "q = Benjamini-Hochberg over all p-values of the same output table. "
+        "Generalist results on different maps share the same training seeds, so maps are NOT independent "
+        "replications; pooled estimates average maps within each resampled seed set.")
 COL = {"E": "#2e8b57", "S": "#8e44ad", "T": "#333333"}
 
 
@@ -44,7 +60,8 @@ def seed_metrics(df, team=0):
     """Game rows -> one row per (cell, focal seed): rates per agent per step and fractions (sums over games)."""
     d = df[df.team == team]
     g = d.groupby(KEYS + ["focal_seed"])
-    s = g[["own_coins", "other_coins", "missed_own", "missed_other", "pure_reward"]].sum()
+    s = g[["own_coins", "other_coins", "missed_own", "missed_other", "pure_reward", "tie_arrivals", "tie_wins",
+           "defence_opps", "defence_choices", "contest_opps", "contest_choices"]].sum()
     n = g.size() * g["episode_len"].first()
     with np.errstate(divide="ignore", invalid="ignore"):
         out = pd.DataFrame({
@@ -54,9 +71,11 @@ def seed_metrics(df, team=0):
             "efficiency": s.own_coins / (s.own_coins + s.missed_own),
             "restraint": s.missed_other / (s.missed_other + s.other_coins),
             "pure_rate": s.pure_reward / n,
+            "defence_rate": s.defence_choices / s.defence_opps, "contest_rate": s.contest_choices / s.contest_opps,
+            "tie_rate": s.tie_arrivals / n, "tie_win_rate": s.tie_wins / s.tie_arrivals,
             "opportunity_other": (s.other_coins + s.missed_other) /
                                  (s.own_coins + s.missed_own + s.other_coins + s.missed_other)})
-    out = out.reset_index()
+    out = out.replace([np.inf, -np.inf], np.nan).reset_index()
     out["coins_per_agent"] = (out.num_coins / out.num_agents).round(3)
     return out
 
@@ -80,9 +99,52 @@ def _ci(x):
 
 
 def _p(x):
+    """Two-sided bootstrap p-value, floored at 1/B (B = number of valid draws): never 0."""
     x = np.asarray(x, float)
     x = x[~np.isnan(x)]
-    return min(1.0, 2 * min((x <= 0).mean(), (x >= 0).mean())) if len(x) else np.nan
+    if not len(x):
+        return np.nan
+    return max(1.0 / len(x), min(1.0, 2 * min((x <= 0).mean(), (x >= 0).mean())))
+
+
+def p_report(p, nb=NB):
+    return "" if np.isnan(p) else (f"<{1 / nb:g}" if p <= 1.0 / nb else f"{p:.4g}")
+
+
+def bh(p):
+    """Benjamini-Hochberg q-values (NaN kept)."""
+    p = np.asarray(p, float)
+    q = np.full_like(p, np.nan)
+    ok = ~np.isnan(p)
+    n = ok.sum()
+    if n:
+        pv = p[ok]
+        order = np.argsort(pv)
+        ranked = pv[order] * n / np.arange(1, n + 1)
+        ranked = np.minimum.accumulate(ranked[::-1])[::-1]
+        out = np.empty(n)
+        out[order] = np.minimum(ranked, 1.0)
+        q[ok] = out
+    return q
+
+
+def add_q(df, pcols=None):
+    """BH over ALL p-columns of the table jointly (one family per analysis); adds <p>_q and <p>_report columns."""
+    if df.empty:
+        return df
+    pcols = pcols or [c for c in df.columns if c == "p" or c.endswith("_p")]
+    flat = np.concatenate([df[c].to_numpy(float) for c in pcols])
+    q = bh(flat)
+    n = len(df)
+    for i, c in enumerate(pcols):
+        qc = "q" if c == "p" else c[:-2] + "_q"
+        df[qc] = q[i * n:(i + 1) * n]
+        df[c + "_report"] = [p_report(v) for v in df[c].to_numpy(float)]
+    return df
+
+
+def write_note(out):
+    (out / "STATISTICS_NOTE.txt").write_text(NOTE.format(nb=NB, res=1 / NB) + "\n")
 
 
 def decompose(g, R, P, metric):
@@ -115,7 +177,7 @@ def decompose(g, R, P, metric):
 
 
 def decomposition_table(sm, partners, group=("training_id", "training_set", "training", "map", "grid_size",
-                                             "num_agents", "num_coins", "coins_per_agent")):
+                                             "num_agents", "num_coins", "coins_per_agent", "k")):
     rows = []
     for keys, g in sm.groupby(list(group)):
         for R, P in contrasts(partners):
@@ -124,7 +186,7 @@ def decomposition_table(sm, partners, group=("training_id", "training_set", "tra
                 if r:
                     rows.append({**dict(zip(group, keys)), "contrast": f"{R}->{P}", "ref": R, "new": P,
                                  "metric": m, **r})
-    return pd.DataFrame(rows)
+    return add_q(pd.DataFrame(rows))
 
 
 def coadaptation_table(sm, partners):
@@ -144,14 +206,14 @@ def coadaptation_table(sm, partners):
                              "partner": A, "metric": m, "co_trained": np.nanmean(co.loc[seeds, m]),
                              "cross": np.nanmean(cr.loc[seeds, m]), "coadaptation": np.nanmean(d), "lo": lo, "hi": hi,
                              "p": _p(bs)})
-    return pd.DataFrame(rows)
+    return add_q(pd.DataFrame(rows))
 
 
-def cells_table(sm):
+def cells_table(sm, metrics=METRICS):
     rows = []
     for keys, g in sm.groupby(KEYS):
         r = dict(zip(KEYS, keys))
-        for m in METRICS:
+        for m in metrics:
             v = g[m].values
             lo, hi = _ci(np.nanmean(v[RNG.integers(0, len(v), (NB, len(v)))], axis=1))
             r.update({m: np.nanmean(v), f"{m}_lo": lo, f"{m}_hi": hi})
@@ -235,17 +297,92 @@ def fig_share(dec, x, out, name, lines=None, xlabel=None):
 
 
 # ------------------------------------------------------------------ experiments
-def exp1(icfg, out):
-    spec = icfg["experiments"]["exp1"]
+def accounting_check(raw, out, tol=1e-3):
+    """pure = p_own * own + p_other * other + penalty * (partner team's thefts per agent), per game and team
+    (per-agent normalisation as in the env: penalty / team_size per member, equal team sizes). Asserts it holds."""
+    key = KEYS + ["focal_seed", "sim_seed"]
+    t0, t1 = raw[raw.team == 0].set_index(key), raw[raw.team == 1].set_index(key)
+    rows = []
+    for me, other in ((t0, t1), (t1, t0)):
+        other = other.loc[me.index]
+        pred = me.payoff_own * me.own_coins + me.payoff_other * me.other_coins + me.payoff_penalty * other.other_coins
+        err = (me.pure_reward - pred).abs()
+        rows.append(pd.DataFrame({"team": me.team.values, "map": me.index.get_level_values("map"),
+                                  "k": me.index.get_level_values("k"), "abs_error": err.values}))
+    d = pd.concat(rows)
+    summ = d.groupby(["k", "map", "team"]).abs_error.agg(["max", "mean", "size"]).reset_index()
+    summ["holds"] = summ["max"] < tol
+    summ.to_csv(out / "accounting_check.csv", index=False)
+    worst = d.abs_error.max()
+    print(f"\nAccounting identity (pure = own + other - k * partner thefts): max |error| = {worst:.2e} "
+          f"over {len(d)} team-games")
+    assert worst < tol, f"accounting identity violated (max error {worst}); see {out / 'accounting_check.csv'}"
+    return summ
+
+
+def best_response(sm, partners, metric="pure_rate"):
+    """For each play partner B: which training partner's focal policy earns the highest `metric` against B
+    (cross pairing). Per map and pooled over maps (mean over maps per seed index). Bootstrap over seeds:
+    P(best) = share of draws in which A is the argmax; best-minus-runner-up difference with CI and p."""
+    c = sm[sm.pairing == "cross"]
+    rows = []
+    groups = [((tr, mp), g) for (tr, mp), g in c.groupby(["training", "map"])]
+    for tr, g in c.groupby("training"):
+        groups.append(((tr, "pooled"), g.groupby(["focal_seed", "train_partner", "play_partner"])[metric]
+                       .mean().reset_index()))
+    for (tr, mp), g in groups:
+        for B in partners:
+            tab = g[g.play_partner == B].pivot_table(index="focal_seed", columns="train_partner", values=metric)
+            if any(A not in tab.columns for A in partners):
+                continue
+            x = tab[partners].dropna().to_numpy()                              # (n_seeds, n_partners)
+            if len(x) < 2:
+                continue
+            n = len(x)
+            mean = x.mean(0)
+            bs = x[RNG.integers(0, n, (NB, n))].mean(1)                        # (NB, n_partners)
+            arg = bs.argmax(1)
+            best, second = np.argsort(mean)[::-1][:2]
+            diff = bs[:, best] - bs[:, second]
+            dlo, dhi = _ci(diff)
+            for i, A in enumerate(partners):
+                lo, hi = _ci(bs[:, i])
+                rows.append({"training": tr, "map": mp, "play_partner": B, "train_partner": A, "metric": metric,
+                             "value": mean[i], "lo": lo, "hi": hi, "p_best": (arg == i).mean(),
+                             "is_best": i == best, "best": partners[best], "runner_up": partners[second],
+                             "best_minus_runner_up": mean[best] - mean[second], "diff_lo": dlo, "diff_hi": dhi,
+                             "p": _p(diff) if i == best else np.nan, "n_seeds": n})
+    return add_q(pd.DataFrame(rows))
+
+
+def tie_table(sm):
+    """Tie arrivals per agent-step and tie win rate, per map and cell (focal team), bootstrap CI over seeds."""
+    return cells_table(sm, TIE_METRICS)
+
+
+def load_source(icfg, source):
+    spec = icfg["experiments"][source]
     cfg = load_experiment(spec["experiment"])
+    return spec, cfg
+
+
+def exp1(icfg, out, source="exp1"):
+    spec, cfg = load_source(icfg, source)
     partners = icfg["partners"]
-    sm = seed_metrics(load_crossplay(cfg["data_root"], spec["training_id"]))
+    raw = load_crossplay(cfg["data_root"], spec["training_id"])
+    accounting_check(raw, out)
+    sm = seed_metrics(raw)
     sm.to_csv(out / "seed_metrics.csv", index=False)
     cells = cells_table(sm)
     cells.to_csv(out / "cells.csv", index=False)
     dec = decomposition_table(sm, partners)
     dec.to_csv(out / "decomposition.csv", index=False)
     coadaptation_table(sm, partners).to_csv(out / "coadaptation.csv", index=False)
+    tie_table(sm).to_csv(out / "tie_stats.csv", index=False)
+    pt = seed_metrics(raw, team=1)                                         # partner team's ties too
+    tie_table(pt).to_csv(out / "tie_stats_partner_team.csv", index=False)
+    br = best_response(sm, partners)
+    br.to_csv(out / "best_response.csv", index=False)
     fig_cells(cells, partners, out, "exp1")
     for fam, maps in cfg["families"].items():
         names = [m["name"] for m in maps]
@@ -254,7 +391,14 @@ def exp1(icfg, out):
             if d["map"].nunique() > 1:
                 fig_decomposition(d, "grid_size", out, f"{fam}_{tr}", xlabel=f"grid size ({fam} family)")
                 fig_share(d, "grid_size", out, f"{fam}_{tr}", xlabel=f"grid size ({fam} family)")
+    write_note(out)
     print_key(dec)
+    b = br[br.is_best & (br["map"] == "pooled")]
+    if len(b):
+        print("\nBest response (pooled over maps): play partner -> best training partner, P(best), diff to runner-up")
+        for _, r in b.iterrows():
+            print(f"  {r.training:10s} vs {r.play_partner:15s} -> {r.best:15s} P(best) {r.p_best:.2f}  "
+                  f"diff {r.best_minus_runner_up:+.4f} [{r.diff_lo:+.4f},{r.diff_hi:+.4f}] p {r.p_report}")
 
 
 def print_key(dec):
@@ -285,7 +429,7 @@ def probe_shifts(coef, partners):
                                          "num_coins"], keys)), "contrast": f"{R}->{P}", "term": t,
                              "with_ref": xa.mean(), "with_new": xb.mean(), "shift": xb.mean() - xa.mean(),
                              "lo": lo, "hi": hi, "p": _p(bs)})
-    return pd.DataFrame(rows)
+    return add_q(pd.DataFrame(rows))
 
 
 def matched_effects(mt, partners):
@@ -313,7 +457,7 @@ def matched_effects(mt, partners):
                                          "num_agents", "num_coins"], keys)), "contrast": f"{R}->{P}", "metric": m,
                              "strategic_policy_effect": pt, "lo": lo, "hi": hi, "p": _p(bs),
                              **{f"{m}_{a[:4]}_on_{w[:4]}": x[(a, w)].mean() for a in (R, P) for w in (R, P)}})
-    return pd.DataFrame(rows)
+    return add_q(pd.DataFrame(rows))
 
 
 def fig_fingerprints(coef, out, tag):
@@ -365,17 +509,122 @@ def fig_probe_shifts(sh, x, out, name, lines=None, xlabel=None):
     plt.close(fig)
 
 
-def exp2(icfg, out, root_out):
-    spec = icfg["experiments"]["exp1"]
-    cfg = load_experiment(spec["experiment"])
+def paired_shift(a, b):
+    """a, b: Series indexed by seed (same policies) -> mean(b - a), CI, p over seeds."""
+    seeds = sorted(set(a.index) & set(b.index))
+    d = b.loc[seeds].to_numpy(float) - a.loc[seeds].to_numpy(float)
+    if len(d) < 2:
+        return None
+    bs = np.nanmean(d[RNG.integers(0, len(d), (NB, len(d)))], 1)
+    lo, hi = _ci(bs)
+    return {"shift": np.nanmean(d), "lo": lo, "hi": hi, "p": _p(bs), "n_seeds": len(d)}
+
+
+def memory_sweep(coef, partners):
+    """Synthetic probes of the focal policies with memory set to the mean memory of world V: change of each
+    preference weight relative to memory = 0 and relative to the reference world's memory (same policy, seeds)."""
+    f = coef[coef.team == 0]
+    R = partners[0]
+    rows = []
+    for (tr, mp, A), g in f.groupby(["training", "map", "trained_with"]):
+        src = {v: gg.set_index("seed") for v, gg in g.groupby("memory_source")}
+        if "zero" not in src:
+            continue
+        for V in partners:
+            if V not in src:
+                continue
+            for t in PROBE_TERMS + ["p_stay"]:
+                for base in ("zero", R):
+                    if base == V or base not in src:
+                        continue
+                    r = paired_shift(src[base][t], src[V][t])
+                    if r:
+                        rows.append({"training": tr, "map": mp, "grid_size": g.grid_size.iloc[0],
+                                     "num_agents": g.num_agents.iloc[0], "trained_with": A, "memory_source": V,
+                                     "relative_to": base, "term": t, "value_base": src[base][t].mean(),
+                                     "value_memory": src[V][t].mean(), **r,
+                                     **{c: src[V][c].iloc[0] for c in MEMORY}})
+    return add_q(pd.DataFrame(rows))
+
+
+def memory_swap(sw, partners):
+    """Memory swap on real states: same states (world W), same policy (trained with A), memory features replaced
+    by the mean memory of world V. Change relative to the reference world's memory R and to the actual memory.
+    Rows with world = 'all' average the change over worlds (seed by seed)."""
+    R = partners[0]
+    rows = []
+    for (tr, mp, A), g in sw.groupby(["training", "map", "trained_with"]):
+        for m in ["p_own", "steal_share", "p_other", "p_stay"]:
+            for V in partners:
+                for base in (R, "actual"):
+                    if base == V:
+                        continue
+                    per_world = []
+                    for W, gw in g.groupby("world"):
+                        a = gw[gw.memory_source == base].set_index("seed")[m]
+                        b = gw[gw.memory_source == V].set_index("seed")[m]
+                        r = paired_shift(a, b)
+                        if r:
+                            per_world.append(b - a)
+                            rows.append({"training": tr, "map": mp, "trained_with": A, "world": W, "metric": m,
+                                         "memory_source": V, "relative_to": base, **r})
+                    if per_world:
+                        avg = pd.concat(per_world, axis=1).mean(axis=1)
+                        r = paired_shift(avg * 0, avg)
+                        if r:
+                            rows.append({"training": tr, "map": mp, "trained_with": A, "world": "all", "metric": m,
+                                         "memory_source": V, "relative_to": base, **r})
+    return add_q(pd.DataFrame(rows))
+
+
+def dedup_pooled(coef):
+    """Baseline synthetic probes pooled over maps, keeping one map per synthetic state set (no pseudo-replicates):
+    per seed, the mean over the distinct state sets; map = 'pooled_dedup'."""
+    b = coef[(coef.memory_source == "zero") & (~coef.pseudo_replicate.astype(bool))]
+    cols = PROBE_TERMS + ["p_stay"]
+    keys = ["training_id", "training_set", "training", "pair", "team", "attitude", "trained_with", "seed"]
+    g = b.groupby(keys)[cols].mean().reset_index()
+    g["map"], g["grid_size"], g["num_agents"], g["num_coins"] = "pooled_dedup", 0, 0, 0
+    g["n_state_sets"] = b.groupby(keys).probe_state_set.nunique().values
+    return g
+
+
+def fig_memory_sweep(ms, out):
+    """Shift of colour_bias and threat_own when memory goes from 0 to each world's mean memory (focal policies)."""
+    d = ms[(ms.relative_to == "zero") & ms.term.isin(["colour_bias", "threat_own"])]
+    for tr, dt in d.groupby("training"):
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        for ax, t in zip(axes, ["colour_bias", "threat_own"]):
+            for (A, V), g in dt[dt.term == t].groupby(["trained_with", "memory_source"]):
+                g = g.sort_values("grid_size")
+                _err(ax, g.grid_size, g["shift"], g.lo, g.hi, ms=3, label=f"trained with {A[:5]}, memory of {V[:5]}")
+            ax.axhline(0, color="k", lw=0.7); ax.set_title(f"Δ {t}: memory = world mean vs 0")
+            ax.set_xlabel("grid size"); ax.grid(alpha=0.3)
+        axes[0].legend(fontsize=6, frameon=False)
+        fig.tight_layout(); fig.savefig(out / f"probe_memory_sweep_{tr}.png", dpi=120); plt.close(fig)
+
+
+def exp2(icfg, out, root_out, source="exp1"):
+    spec, cfg = load_source(icfg, source)
     partners = icfg["partners"]
     base = Path(cfg["data_root"]) / "influence" / spec["training_id"]
-    coef = pd.read_csv(base / "probe_coefficients.csv")
+    coef_all = pd.read_csv(base / "probe_coefficients.csv")
+    coef = coef_all[coef_all.memory_source == "zero"]
     mt = pd.read_csv(base / "probe_matched.csv")
     sh = probe_shifts(coef, partners)
+    flags = coef.groupby(["training_set", "map"])[["pseudo_replicate", "probe_state_set"]].first()
+    if not sh.empty:
+        sh = sh.join(flags, on=["training_set", "map"])
+        sh["pseudo_replicate"] = sh.pseudo_replicate.astype(bool)
     sh.to_csv(out / "probe_shifts.csv", index=False)
+    probe_shifts(dedup_pooled(coef), partners).to_csv(out / "probe_shifts_pooled_dedup.csv", index=False)
     me = matched_effects(mt, partners)
     me.to_csv(out / "matched_effects.csv", index=False)
+    ms = memory_sweep(coef_all, partners)
+    ms.to_csv(out / "probe_memory_sweep.csv", index=False)
+    swp = base / "probe_memory_swap.csv"
+    sw = memory_swap(pd.read_csv(swp), partners) if swp.exists() else pd.DataFrame()
+    sw.to_csv(out / "memory_swap_effects.csv", index=False)
     fig_fingerprints(coef, out, "exp2")
     for fam, maps in cfg["families"].items():
         names = [m["name"] for m in maps]
@@ -383,6 +632,8 @@ def exp2(icfg, out, root_out):
             d = sh[(sh["map"].isin(names)) & (sh.training == tr)]
             if d["map"].nunique() > 1:
                 fig_probe_shifts(d, "grid_size", out, f"{fam}_{tr}", xlabel=f"grid size ({fam} family)")
+    if not ms.empty:
+        fig_memory_sweep(ms, out)
     # policy-level vs behaviour-level strategic effect (needs exp1 analysis)
     d1 = root_out / "exp1" / "decomposition.csv"
     if d1.exists():
@@ -403,6 +654,11 @@ def exp2(icfg, out, root_out):
         ax.set_ylabel("strategic effect on P(other coin) share (same states)")
         ax.legend(fontsize=7, frameon=False); ax.grid(alpha=0.3)
         fig.tight_layout(); fig.savefig(out / "policy_vs_behaviour.png", dpi=120); plt.close(fig)
+    write_note(out)
+    if "pseudo_replicate" in sh and sh.pseudo_replicate.any():
+        print("\nNOTE: baseline synthetic states repeat across maps with the same maximum torus distance "
+              f"({sorted(sh[sh.pseudo_replicate]['map'].unique())} duplicate earlier maps): pseudo-replication. "
+              "Use probe_shifts_pooled_dedup.csv for pooled statements.")
     k = sh[(sh.contrast.str.startswith(partners[0])) & (sh.term.isin(["colour_bias", "threat_own"]))]
     print("\nStrategic change of the focal team's preference weights (trained with new vs reference partner):")
     for _, r in k.sort_values(["training", "term", "contrast", "num_agents"]).iterrows():
@@ -458,12 +714,12 @@ def cluster_boot(df, fn, cluster="focal_seed"):
     return pt, np.percentile(bs, 2.5, axis=0), np.percentile(bs, 97.5, axis=0)
 
 
-def exp4(icfg, out, root_out):
+def exp4(icfg, out, root_out, source="exp1"):
     """Observational view vs ground truth."""
     partners = icfg["partners"]
     R = partners[0]
     frames = []
-    for key in ("exp1", "exp3"):
+    for key in (("exp1", "exp3") if source == "exp1" else (source,)):
         spec = icfg["experiments"][key]
         cfg = load_experiment(spec["experiment"])
         try:
@@ -472,7 +728,7 @@ def exp4(icfg, out, root_out):
             print(f"  ({key} cross-play not found, skipped)")
             continue
         f, p = seed_metrics(raw, 0), seed_metrics(raw, 1)
-        p = p.rename(columns={m: f"partner_{m}" for m in METRICS + ["opportunity_other"]})
+        p = p.rename(columns={m: f"partner_{m}" for m in METRICS + TIE_METRICS + ["opportunity_other"]})
         frames.append(f.merge(p, on=KEYS + ["focal_seed", "coins_per_agent"]))
     sm = pd.concat(frames, ignore_index=True)
 
@@ -548,20 +804,27 @@ def exp4(icfg, out, root_out):
     print("\nPeer-effect regressions (focal metric on partner's steal_frac, map fixed effects, 95% cluster CI):")
     for _, r in rg.iterrows():
         print(f"  {r.training:10s} y={r.y:10s} {r.spec:40s} beta {r.beta:+.3f} [{r.lo:+.3f},{r.hi:+.3f}]  n={r.n}")
+    write_note(out)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--influence", default="configs/influence.yaml")
     ap.add_argument("--exp", type=int, required=True, choices=[1, 2, 3, 4])
+    ap.add_argument("--source", default="exp1", help="key under experiments: in the influence config (exp1, k0, ...)")
     a = ap.parse_args()
+    warnings.filterwarnings("ignore", message="Mean of empty slice")   # cells with no defence/contest opportunity
     icfg = _yaml(a.influence)
-    cfg = load_experiment(icfg["experiments"]["exp1"]["experiment"])
+    spec, cfg = load_source(icfg, a.source)
     root_out = Path(cfg["data_root"]) / "influence" / "analysis"
+    if a.source != "exp1":
+        if a.exp == 3:
+            raise SystemExit("exp 3 (scarcity) only exists for the exp1/exp3 sources")
+        root_out = root_out / spec["training_id"]
     out = root_out / f"exp{a.exp}"
     out.mkdir(parents=True, exist_ok=True)
-    {1: lambda: exp1(icfg, out), 2: lambda: exp2(icfg, out, root_out), 3: lambda: exp3(icfg, out),
-     4: lambda: exp4(icfg, out, root_out)}[a.exp]()
+    {1: lambda: exp1(icfg, out, a.source), 2: lambda: exp2(icfg, out, root_out, a.source),
+     3: lambda: exp3(icfg, out), 4: lambda: exp4(icfg, out, root_out, a.source)}[a.exp]()
     print(f"\noutputs in {out}")
 
 

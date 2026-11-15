@@ -3,11 +3,18 @@
 Two teams (red = even agents, blue = odd agents) on a G×G torus, as many coins as agents (half of
 each colour). Every step each agent **chooses a coin (or stay)** and the environment moves it one
 cell along the shortest path, with the same rule for everybody. Taking your team's coin gives +1.
-Taking the other team's coin gives +1 to you and −2 to the robbed team, split among its members.
+Taking the other team's coin gives +1 to you and −k to the robbed team, split among its members
+(`payoff: {own: 1, other: 1, penalty: -k}` in the experiment config; k = 2 in `scaling.yaml`). If several agents land
+on the same coin in the same step, one of them, drawn uniformly at random, collects it.
 
 **Observation:** one row per coin, in raw step counts that mean the same on every map: whether
 it is my team's coin, my distance, my nearest teammate's distance, the nearest opponent's
-distance, how many teammates and opponents targeted it last step, and whether I have teammates.
+distance, how many teammates and opponents targeted it last step, and whether I have teammates; plus four memory
+features (exponential moving averages, `memory: {decay: 0.9}`): how often my team was robbed, how many opponents
+targeted my colour, how often my team stole, and how many of my team targeted the other colour.
+
+**Training:** PPO, one policy per team; actor and critic gradients clipped separately; returns normalised with
+running statistics per team (the critic predicts normalised values).
 
 **Policy:** a set network scores every coin plus "stay". It is shared by all members of a team
 and works with any number of coins, so the same checkpoint plays any grid size and team size.
@@ -20,7 +27,6 @@ team's attitude. With 2 agents this is exactly the original SVO.
 
 * Same game length (150 steps) on every map, in training and simulation.
 * **density** family: agents per cell ≈ 2/9; grids 3–10 with 2, 4, 6, 8, 10, 14, 18, 22 agents.
-* **ratio** family: grid size / agents = 1.5; grids 3, 6, 9 with 2, 4, 6 agents.
 * Pairs (red vs blue): ind–ind, ind–coop, ind–comp; 10 training seeds; 20 games per trained pair.
 * Training sets: `all_maps` (generalist, trained on every map at once) and one specialist set per map.
 
@@ -48,6 +54,10 @@ python simulate.py --dirs <data_root>/all_maps/*/Training_<id> --maps grid12_age
 ./smoke_test.sh     # whole pipeline on tiny settings in /tmp; must end with "SMOKE TEST PASSED"
 ./speed_test.sh     # GPU + CPU speed with the full settings, extrapolated; writes speed_test_<time>.log
 ```
+
+## Theft-penalty sweep (k = 0, 2, 10)
+
+See [`docs/experiment_k.md`](docs/experiment_k.md): `./scripts/k_smoke.sh` first, then `./scripts/k_all.sh`.
 
 ## Social-influence study (strategic vs ecological)
 
